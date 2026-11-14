@@ -1,0 +1,6 @@
+{
+  "name": "Solar Sandbox",
+  "description": "3D N-body astrophysics & cosmic destruction sandbox with real Solar System data, PBR shaders, black holes, gravitational lensing, tidal disruption, and stellar evolution.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
