@@ -144,4 +144,67 @@ class SolarPhysicsTest {
         assertEquals(32, pts.size)
         assertTrue((pts.last() - pts.first()).length() > 0.1)
     }
+
+    @Test
+    fun `black hole tidal disruption produces spiral filaments, spaghettification, and telemetry status`() {
+        val engine = PhysicsEngine()
+        val bh = CelestialBody(
+            id = 1L, name = "Gargantua", type = BodyType.BLACK_HOLE,
+            pos = Vec3d.ZERO, vel = Vec3d.ZERO,
+            massSolar = 12.0, radiusKm = 35.4, temperatureK = 0.0
+        )
+        val star = CelestialBody(
+            id = 2L, name = "Sun", type = BodyType.STAR,
+            pos = Vec3d(0.18, 0.0, 0.0), vel = Vec3d(0.0, 0.0, 8.0),
+            massSolar = 1.0, radiusKm = 696340.0, temperatureK = 5778.0, luminositySolar = 1.0
+        )
+        engine.loadSnapshot(SimulationSnapshot("Spaghettify", "test", 0.0, listOf(bh, star), SimulationConfig(timeScaleYearsPerSec = 0.02)))
+        engine.step(0.02)
+        val frame = engine.buildRenderFrameState(60f)
+        assertTrue("Expected visible tidal stream filaments", frame.tidalFilaments.isNotEmpty())
+        val starNow = frame.bodies.first { it.id == 2L }
+        assertTrue("Expected star tidalStretchAmount > 0.1, got ${starNow.tidalStretchAmount}", starNow.tidalStretchAmount > 0.1f)
+        val tel = engine.computeTelemetry(starNow)
+        assertTrue("Expected Spaghettifying in telemetry status: ${tel.statusSummary}", tel.statusSummary.contains("Spaghettifying", ignoreCase = true))
+    }
+
+    @Test
+    fun `smaller black hole consumes heavier star on direct collision`() {
+        val engine = PhysicsEngine()
+        val bh = CelestialBody(
+            id = 1L, name = "Stellar BH", type = BodyType.BLACK_HOLE,
+            pos = Vec3d.ZERO, vel = Vec3d.ZERO,
+            massSolar = 12.0, radiusKm = 35.4, temperatureK = 0.0
+        )
+        val heavyStar = CelestialBody(
+            id = 2L, name = "Blue Supergiant", type = BodyType.STAR,
+            pos = Vec3d(0.005, 0.0, 0.0), vel = Vec3d(-1.0, 0.0, 0.0),
+            massSolar = 25.0, radiusKm = 2_000_000.0, temperatureK = 22000.0, luminositySolar = 5000.0
+        )
+        engine.loadSnapshot(SimulationSnapshot("BHWin", "test", 0.0, listOf(bh, heavyStar), SimulationConfig(timeScaleYearsPerSec = 0.05)))
+        repeat(10) { engine.step(0.02) }
+        val bodies = engine.getBodiesSnapshot()
+        assertEquals(1, bodies.size)
+        val survivor = bodies.first()
+        assertEquals(BodyType.BLACK_HOLE, survivor.type)
+        assertTrue("Black hole should gain mass and record absorbedMassSolar", survivor.massSolar >= 36.5 && survivor.absorbedMassSolar > 20.0)
+    }
+
+    @Test
+    fun `snapshot serialization preserves BodyArchetype and absorbedMassSolar`() {
+        val snap = SolarSystemPresets.buildPreset(SystemPreset.SOLAR_SYSTEM)
+        val bh = CelestialBody(
+            id = 999L, name = "Test BH", type = BodyType.BLACK_HOLE,
+            archetype = BodyArchetype.GENERIC_ROCK,
+            pos = Vec3d(5.0, 0.0, 0.0), vel = Vec3d.ZERO,
+            massSolar = 20.0, radiusKm = 59.0, temperatureK = 0.0, absorbedMassSolar = 3.25
+        )
+        val modified = snap.copy(bodies = snap.bodies + bh)
+        val json = SnapshotSerializer.toJsonString(modified)
+        val decoded = SnapshotSerializer.fromJsonString(json)
+        val decodedJupiter = decoded.bodies.first { it.name == "Jupiter" }
+        val decodedBh = decoded.bodies.first { it.id == 999L }
+        assertEquals(BodyArchetype.JUPITER, decodedJupiter.archetype)
+        assertEquals(3.25, decodedBh.absorbedMassSolar, 1e-4)
+    }
 }

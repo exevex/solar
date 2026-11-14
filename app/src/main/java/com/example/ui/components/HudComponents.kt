@@ -9,8 +9,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Label
 import androidx.compose.material.icons.filled.*
@@ -224,8 +226,10 @@ fun ToolRail(
 ) {
     GlassHudSurface(modifier = modifier.padding(start = 12.dp)) {
         Column(
-            modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier
+                .padding(vertical = 6.dp, horizontal = 4.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             RailButton(
@@ -235,6 +239,14 @@ fun ToolRail(
                 accent = CyanTelemetry,
                 tag = "tool_orbit",
                 onClick = { onSelectTab(SandboxToolTab.NONE) }
+            )
+            RailButton(
+                icon = Icons.Default.OpenWith,
+                label = "Drag",
+                selected = activeTab == SandboxToolTab.DRAG,
+                accent = AmberWarm,
+                tag = "tool_drag",
+                onClick = { onSelectTab(SandboxToolTab.DRAG) }
             )
             RailButton(
                 icon = Icons.Default.AddCircleOutline,
@@ -268,6 +280,105 @@ fun ToolRail(
                 tag = "tool_inspect",
                 onClick = { onSelectTab(SandboxToolTab.INSPECT) }
             )
+        }
+    }
+}
+
+@Composable
+fun CosmicStatusTicker(
+    uiState: SandboxUiState,
+    modifier: Modifier = Modifier
+) {
+    val selectedTelemetry = uiState.selectedTelemetry
+    val showDragBanner = uiState.activeToolTab == SandboxToolTab.DRAG
+    val latestEvents = uiState.activityFeed.take(2)
+    if (!showDragBanner && selectedTelemetry == null && latestEvents.isEmpty()) return
+
+    Column(
+        modifier = modifier
+            .padding(start = 76.dp, top = 58.dp)
+            .widthIn(max = 310.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        if (showDragBanner) {
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = PanelObsidian,
+                border = BorderStroke(1.dp, AmberWarm.copy(alpha = 0.75f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(Icons.Default.OpenWith, contentDescription = null, tint = AmberWarm, modifier = Modifier.size(14.dp))
+                    Text(
+                        text = "Drag Tool: Touch & drag any object to move/fling",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AmberWarm
+                    )
+                }
+            }
+        }
+
+        if (selectedTelemetry != null) {
+            val isCritical = selectedTelemetry.body.tidalStress > 0.12f || selectedTelemetry.body.crustHeat > 0.35f
+            val borderCol = when {
+                isCritical -> DangerNova.copy(alpha = 0.75f)
+                selectedTelemetry.body.type == BodyType.BLACK_HOLE -> PurpleAccretion.copy(alpha = 0.7f)
+                else -> HairlineBorder
+            }
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = PanelObsidian,
+                border = BorderStroke(1.dp, borderCol)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(
+                                when {
+                                    isCritical -> DangerNova
+                                    selectedTelemetry.body.type == BodyType.BLACK_HOLE -> PurpleAccretion
+                                    else -> EmeraldOrbit
+                                }
+                            )
+                    )
+                    Text(
+                        text = "${selectedTelemetry.body.name}: ${selectedTelemetry.statusSummary}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+
+        if (latestEvents.isNotEmpty()) {
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = PanelObsidian,
+                border = BorderStroke(1.dp, HairlineBorder)
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    latestEvents.forEachIndexed { idx, msg ->
+                        Text(
+                            text = "• $msg",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (idx == 0) CyanTelemetry else TextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -431,26 +542,46 @@ fun LabelsOverlay(
         for (lbl in labels) {
             val offsetY = with(density) { 16.dp.roundToPx() }
             val accent = when {
+                lbl.statusTag == "SPAGHETTIFYING" || lbl.statusTag == "MOLTEN" -> DangerNova
                 lbl.isSelected -> CyanTelemetry
                 lbl.type == BodyType.BLACK_HOLE -> PurpleAccretion
                 lbl.type.isLuminous -> AmberWarm
                 else -> TextSecondary
             }
-            Surface(
-                shape = RoundedCornerShape(6.dp),
-                color = PanelObsidian,
-                border = BorderStroke(if (lbl.isSelected) 1.dp else 0.5.dp, accent.copy(alpha = 0.75f)),
+            Column(
                 modifier = Modifier
-                    .offset { IntOffset(lbl.xPx.roundToInt() - 30, lbl.yPx.roundToInt() + offsetY) }
-                    .clickable { onSelectBody(lbl.id) }
+                    .offset { IntOffset(lbl.xPx.roundToInt() - 32, lbl.yPx.roundToInt() + offsetY) },
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text(
-                    text = lbl.name,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (lbl.isSelected) TextPrimary else accent,
-                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
-                    maxLines = 1
-                )
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = PanelObsidian,
+                    border = BorderStroke(if (lbl.isSelected) 1.dp else 0.5.dp, accent.copy(alpha = 0.78f)),
+                    modifier = Modifier.clickable { onSelectBody(lbl.id) }
+                ) {
+                    Text(
+                        text = lbl.name,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (lbl.isSelected) TextPrimary else accent,
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                        maxLines = 1
+                    )
+                }
+                if (lbl.statusTag != null) {
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = accent.copy(alpha = 0.22f),
+                        modifier = Modifier.padding(top = 2.dp)
+                    ) {
+                        Text(
+                            text = lbl.statusTag,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = accent,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                            maxLines = 1
+                        )
+                    }
+                }
             }
         }
     }

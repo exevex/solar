@@ -37,6 +37,7 @@ fun SpawnDrawer(
     onSelectCategory: (SpawnCategory) -> Unit,
     onSelectTemplate: (SpawnTemplate) -> Unit,
     onSpawnQuickOrbit: () -> Unit,
+    onTogglePause: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -45,100 +46,129 @@ fun SpawnDrawer(
     }
 
     GlassHudSurface(
-        modifier = modifier.width(295.dp).fillMaxHeight(),
-        borderColor = EmeraldOrbit.copy(alpha = 0.55f)
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(start = 78.dp, end = 12.dp, bottom = 8.dp),
+        borderColor = EmeraldOrbit.copy(alpha = 0.6f)
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // Header row: Category pills + action buttons (leaves all cards completely unobstructed!)
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("Spawn Body", style = MaterialTheme.typography.titleMedium, color = EmeraldOrbit)
+                LazyRow(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(SpawnCategory.entries) { cat ->
+                        val active = cat == uiState.selectedSpawnCategory
+                        val catAccent = if (cat == SpawnCategory.BLACK_HOLES) PurpleAccretion else EmeraldOrbit
+                        FilterChip(
+                            selected = active,
+                            onClick = { onSelectCategory(cat) },
+                            label = { Text(cat.label, style = MaterialTheme.typography.labelSmall) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = catAccent.copy(alpha = 0.24f),
+                                selectedLabelColor = catAccent
+                            )
+                        )
+                    }
+                }
+
+                Text(
+                    text = "Tap space to place",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextSecondary
+                )
+
+                Button(
+                    onClick = onSpawnQuickOrbit,
+                    modifier = Modifier.heightIn(min = 38.dp).testTag("spawn_orbit_btn"),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldOrbit, contentColor = SpaceVoid)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Orbit Spawn", style = MaterialTheme.typography.labelMedium)
+                }
+
+                IconButton(onClick = onTogglePause, modifier = Modifier.size(36.dp).testTag("spawn_play_pause_btn")) {
+                    Icon(
+                        imageVector = if (uiState.config.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                        contentDescription = stringResource(R.string.cd_play_pause),
+                        tint = if (uiState.config.isPaused) AmberWarm else CyanTelemetry
+                    )
+                }
+
                 IconButton(onClick = onClose, modifier = Modifier.size(36.dp)) {
                     Icon(Icons.Default.Close, contentDescription = stringResource(R.string.cd_close_panel), tint = TextSecondary)
                 }
             }
-            Text(
-                text = "Tap anywhere in space to place, or switch to Sling mode to aim velocity.",
-                style = MaterialTheme.typography.bodySmall,
-                color = TextSecondary
-            )
-            Spacer(Modifier.height(8.dp))
 
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(SpawnCategory.entries) { cat ->
-                    val active = cat == uiState.selectedSpawnCategory
-                    FilterChip(
-                        selected = active,
-                        onClick = { onSelectCategory(cat) },
-                        label = { Text(cat.label, style = MaterialTheme.typography.labelSmall) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = EmeraldOrbit.copy(alpha = 0.22f),
-                            selectedLabelColor = EmeraldOrbit
-                        )
-                    )
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+            // Wide multi-item horizontal card strip showing 4-5 objects at once without cramped scrolling!
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(filtered) { tpl ->
                     val sel = tpl.id == uiState.selectedSpawnTemplate.id
+                    val isBh = tpl.type == BodyType.BLACK_HOLE
+                    val highlight = if (isBh) PurpleAccretion else EmeraldOrbit
                     Surface(
                         shape = RoundedCornerShape(10.dp),
-                        color = if (sel) EmeraldOrbit.copy(alpha = 0.16f) else PanelElevated,
-                        border = BorderStroke(1.dp, if (sel) EmeraldOrbit else HairlineBorder),
+                        color = if (sel) highlight.copy(alpha = 0.20f) else PanelElevated,
+                        border = BorderStroke(if (sel) 1.5.dp else 1.dp, if (sel) highlight else HairlineBorder),
                         modifier = Modifier
-                            .fillMaxWidth()
+                            .width(166.dp)
+                            .heightIn(min = 58.dp)
                             .clickable { onSelectTemplate(tpl) }
                             .testTag("spawn_tpl_${tpl.id}")
                     ) {
                         Row(
-                            modifier = Modifier.padding(10.dp),
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            horizontalArrangement = Arrangement.spacedBy(9.dp)
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(16.dp)
-                                        .clip(CircleShape)
-                                        .background(
-                                            if (tpl.type == BodyType.BLACK_HOLE) Color.Black
-                                            else Color(tpl.albedoColor.first, tpl.albedoColor.second, tpl.albedoColor.third)
-                                        )
-                                        .border(1.dp, if (tpl.type == BodyType.BLACK_HOLE) PurpleAccretion else Color.White.copy(alpha = 0.4f), CircleShape)
-                                )
-                                Column {
-                                    Text(tpl.name, style = MaterialTheme.typography.titleSmall, color = TextPrimary)
-                                    Text(
-                                        text = if (tpl.type == BodyType.BLACK_HOLE) "${tpl.massSolar} M☉"
-                                        else if (tpl.type.isLuminous) "${tpl.temperatureK.toInt()} K • ${tpl.massSolar} M☉"
-                                        else "R = ${tpl.radiusKm.toInt()} km",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = TextSecondary
+                            Box(
+                                modifier = Modifier
+                                    .size(22.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (isBh) Color.Black
+                                        else Color(tpl.albedoColor.first, tpl.albedoColor.second, tpl.albedoColor.third)
                                     )
-                                }
+                                    .border(
+                                        width = if (isBh) 2.dp else 1.dp,
+                                        color = if (isBh) AmberWarm else Color.White.copy(alpha = 0.45f),
+                                        shape = CircleShape
+                                    )
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = tpl.name,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = TextPrimary,
+                                    maxLines = 1
+                                )
+                                Text(
+                                    text = when {
+                                        isBh -> "${tpl.massSolar} M☉ • Event Horizon"
+                                        tpl.type.isLuminous -> "${tpl.temperatureK.toInt()} K • ${tpl.massSolar} M☉"
+                                        else -> "R = ${formatRadiusKm(tpl.radiusKm)}"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (isBh) PurpleAccretion else TextSecondary,
+                                    maxLines = 1
+                                )
                             }
-                            if (sel) Icon(Icons.Default.CheckCircle, contentDescription = null, tint = EmeraldOrbit, modifier = Modifier.size(18.dp))
                         }
                     }
                 }
-            }
-
-            Spacer(Modifier.height(8.dp))
-            Button(
-                onClick = onSpawnQuickOrbit,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("spawn_orbit_btn"),
-                colors = ButtonDefaults.buttonColors(containerColor = EmeraldOrbit, contentColor = SpaceVoid)
-            ) {
-                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Spawn in Circular Orbit")
             }
         }
     }
@@ -342,82 +372,174 @@ fun InspectorPanel(
                 }
             }
 
-            // Live Telemetry Grid
+            // Live Status + Telemetry Grid
+            val statusIsCritical = b.tidalStress > 0.12f || b.crustHeat > 0.35f
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = (if (statusIsCritical) DangerNova else CyanTelemetry).copy(alpha = 0.14f),
+                border = BorderStroke(1.dp, (if (statusIsCritical) DangerNova else CyanTelemetry).copy(alpha = 0.55f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = telemetry.statusSummary,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (statusIsCritical) DangerNova else CyanTelemetry,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                )
+            }
+
             Surface(shape = RoundedCornerShape(10.dp), color = PanelElevated, border = BorderStroke(1.dp, HairlineBorder)) {
                 Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     TelemetryRow("Speed", String.format("%.2f km/s", telemetry.speedKmS))
                     TelemetryRow("Surface Gravity", String.format("%.2f g", telemetry.surfaceGravityG))
                     TelemetryRow("Escape Velocity", String.format("%.2f km/s", telemetry.escapeVelocityKmS))
-                    TelemetryRow("Temperature", String.format("%.0f K (%.0f °C)", b.temperatureK, b.temperatureK - 273.15))
+                    TelemetryRow("Temperature", formatTemperatureK(b.temperatureK))
                     TelemetryRow("Density", String.format("%.2f g/cm³", telemetry.densityGCm3))
                     if (telemetry.orbitalPeriodDays != null && telemetry.semiMajorAxisAu != null) {
                         TelemetryRow("Orbit Period", String.format("%.1f days", telemetry.orbitalPeriodDays))
                         TelemetryRow("Semi-Major / Ecc", String.format("%.3f AU • e=%.3f", telemetry.semiMajorAxisAu, telemetry.eccentricity ?: 0.0))
                     }
                     if (b.type == BodyType.BLACK_HOLE) {
-                        TelemetryRow("Schwarzschild R", String.format("%.1f km", telemetry.schwarzschildKm))
+                        TelemetryRow("Schwarzschild R", formatRadiusKm(telemetry.schwarzschildKm))
+                        if (b.absorbedMassSolar > 0.0) {
+                            TelemetryRow("Absorbed Mass", formatMass(b.absorbedMassSolar))
+                        }
                     }
                 }
             }
 
-            Text("Live Property Editor", style = MaterialTheme.typography.titleSmall, color = CyanTelemetry)
-
-            // Radius Slider (log)
-            val minR = ln(200.0); val maxR = ln(15_000_000.0)
-            val rFrac = ((ln(b.radiusKm.coerceIn(200.0, 15_000_000.0)) - minR) / (maxR - minR)).toFloat()
-            LabeledSlider("Radius: ${formatRadiusKm(b.radiusKm)}", rFrac) { f ->
-                val newR = kotlin.math.exp(minR + f * (maxR - minR))
-                onEditBody { it.copy(radiusKm = newR) }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Live Property Editor", style = MaterialTheme.typography.titleSmall, color = CyanTelemetry)
+                Text("Release re-centers ∞", style = MaterialTheme.typography.labelSmall, color = TextDim)
             }
 
-            // Mass Slider (log)
-            val minM = ln(1e-9); val maxM = ln(500.0)
-            val mFrac = ((ln(b.massSolar.coerceIn(1e-9, 500.0)) - minM) / (maxM - minM)).toFloat()
-            LabeledSlider("Mass: ${formatMass(b.massSolar)}", mFrac) { f ->
-                val newM = kotlin.math.exp(minM + f * (maxM - minM))
-                onEditBody { it.copy(massSolar = newM) }
+            // Radius Slider (Infinite Self-Recentering)
+            if (b.type != BodyType.BLACK_HOLE) {
+                InfiniteValueSlider(
+                    bodyId = b.id,
+                    label = "Radius: ${formatRadiusKm(b.radiusKm)}",
+                    currentValue = b.radiusKm,
+                    minFloor = 1.0,
+                    testTagPrefix = "slider_radius",
+                    onValueChange = { newR ->
+                        onEditBody { it.copy(radiusKm = newR) }
+                    }
+                )
             }
 
-            // Density Slider
-            val dFrac = (telemetry.densityGCm3.coerceIn(0.2, 25.0) / 25.0).toFloat()
-            LabeledSlider("Density: ${String.format("%.2f g/cm³", telemetry.densityGCm3)}", dFrac) { f ->
-                onEditDensity(0.2 + f * 24.8)
-            }
-
-            // Temperature Slider
-            val tFrac = (b.temperatureK.coerceIn(20.0, 35000.0) / 35000.0).toFloat()
-            LabeledSlider("Temperature: ${b.temperatureK.toInt()} K", tFrac) { f ->
-                val newT = 20.0 + f * 34980.0
-                onEditBody {
-                    it.copy(
-                        temperatureK = newT,
-                        albedoColor = if (it.type.isLuminous) kelvinToRgb(newT) else it.albedoColor,
-                        crustHeat = if (!it.type.isLuminous && newT > 1200.0) ((newT - 1200.0) / 3000.0).toFloat().coerceIn(0f, 1f) else it.crustHeat
-                    )
+            // Mass Slider (Infinite Self-Recentering — push 500 -> lift -> 500 in center -> push higher ∞!)
+            InfiniteValueSlider(
+                bodyId = b.id,
+                label = "Mass: ${formatMass(b.massSolar)}",
+                currentValue = b.massSolar,
+                minFloor = 1e-16,
+                testTagPrefix = "slider_mass",
+                onValueChange = { newM ->
+                    onEditBody { it.copy(massSolar = newM) }
                 }
+            )
+
+            // Density Slider (Infinite Self-Recentering)
+            if (b.type != BodyType.BLACK_HOLE) {
+                InfiniteValueSlider(
+                    bodyId = b.id,
+                    label = "Density: ${formatCompactDouble(telemetry.densityGCm3)} g/cm³",
+                    currentValue = telemetry.densityGCm3,
+                    minFloor = 0.01,
+                    testTagPrefix = "slider_density",
+                    onValueChange = { newD ->
+                        onEditDensity(newD)
+                    }
+                )
             }
 
-            // Luminosity (for stars)
+            // Temperature Slider (Infinite Self-Recentering)
+            if (b.type != BodyType.BLACK_HOLE) {
+                InfiniteValueSlider(
+                    bodyId = b.id,
+                    label = "Temperature: ${formatTemperatureK(b.temperatureK)}",
+                    currentValue = b.temperatureK,
+                    minFloor = 1.0,
+                    seedIfZero = 100.0,
+                    testTagPrefix = "slider_temp",
+                    onValueChange = { newT ->
+                        onEditBody {
+                            it.copy(
+                                temperatureK = newT,
+                                albedoColor = if (it.type.isLuminous) kelvinToRgb(newT) else it.albedoColor,
+                                crustHeat = if (!it.type.isLuminous && newT > 1200.0) ((newT - 1200.0) / 3000.0).toFloat().coerceIn(0f, 1f) else it.crustHeat
+                            )
+                        }
+                    }
+                )
+            }
+
+            // Luminosity (Infinite Self-Recentering for stars)
             if (b.type.isLuminous) {
-                val lFrac = (ln(b.luminositySolar.coerceIn(0.01, 5000.0)) / ln(5000.0)).toFloat().coerceIn(0f, 1f)
-                LabeledSlider("Luminosity: ${String.format("%.2f L☉", b.luminositySolar)}", lFrac) { f ->
-                    val newLum = 0.01 * (500000.0).pow(f.toDouble())
-                    onEditBody { it.copy(luminositySolar = newLum) }
-                }
+                InfiniteValueSlider(
+                    bodyId = b.id,
+                    label = "Luminosity: ${formatCompactDouble(b.luminositySolar)} L☉",
+                    currentValue = b.luminositySolar,
+                    minFloor = 1e-4,
+                    seedIfZero = 0.5,
+                    testTagPrefix = "slider_luminosity",
+                    onValueChange = { newLum ->
+                        onEditBody { it.copy(luminositySolar = newLum) }
+                    }
+                )
             }
 
-            // Atmosphere, Axial Tilt, Spin
-            LabeledSlider("Atmosphere: ${(b.atmosphereDensity * 100).toInt()}%", b.atmosphereDensity) { f ->
-                onEditBody { it.copy(atmosphereDensity = f) }
+            // Atmosphere (Infinite Self-Recentering)
+            if (!b.type.isLuminous && b.type != BodyType.BLACK_HOLE) {
+                InfiniteValueSlider(
+                    bodyId = b.id,
+                    label = "Atmosphere: ${(b.atmosphereDensity * 100).toInt()}%",
+                    currentValue = b.atmosphereDensity.toDouble(),
+                    minFloor = 0.0,
+                    seedIfZero = 0.08,
+                    snapZeroBelow = 0.005,
+                    testTagPrefix = "slider_atmo",
+                    onValueChange = { newA ->
+                        onEditBody { it.copy(atmosphereDensity = newA.toFloat()) }
+                    }
+                )
             }
-            LabeledSlider("Axial Tilt: ${b.axialTiltDeg.toInt()}°", (b.axialTiltDeg.toFloat() / 180f).coerceIn(0f, 1f)) { f ->
-                onEditBody { it.copy(axialTiltDeg = (f * 180.0)) }
+
+            // Axial Tilt (0..180 deg)
+            val tiltFrac = (b.axialTiltDeg.toFloat() / 180f).coerceIn(0f, 1f)
+            Column {
+                Text("Axial Tilt: ${b.axialTiltDeg.toInt()}°", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+                Slider(
+                    value = tiltFrac,
+                    onValueChange = { f -> onEditBody { it.copy(axialTiltDeg = f * 180.0) } },
+                    modifier = Modifier.height(26.dp),
+                    colors = SliderDefaults.colors(
+                        thumbColor = AmberStar,
+                        activeTrackColor = AmberStar,
+                        inactiveTrackColor = HairlineBorder
+                    )
+                )
             }
-            val spinRateFrac = (1f - (kotlin.math.abs(b.rotationPeriodHours).toFloat() / 240f).coerceIn(0f, 1f))
-            LabeledSlider("Spin Speed", spinRateFrac) { f ->
-                val hours = (240.0 * (1.0 - f)).coerceAtLeast(1.5)
-                onEditBody { it.copy(rotationPeriodHours = hours) }
-            }
+
+            // Spin Rate (Infinite Self-Recentering rotations/day)
+            val rotPerDay = (24.0 / kotlin.math.abs(b.rotationPeriodHours).coerceAtLeast(1e-4))
+            InfiniteValueSlider(
+                bodyId = b.id,
+                label = "Spin Rate: ${formatCompactDouble(rotPerDay)} rot/day",
+                currentValue = rotPerDay,
+                minFloor = 0.005,
+                seedIfZero = 1.0,
+                testTagPrefix = "slider_spin",
+                onValueChange = { newRotDay ->
+                    val sign = if (b.rotationPeriodHours < 0.0) -1.0 else 1.0
+                    val newHours = (24.0 / newRotDay.coerceAtLeast(1e-4)) * sign
+                    onEditBody { it.copy(rotationPeriodHours = newHours) }
+                }
+            )
 
             // Orbit Velocity Nudge
             Text("Orbit Velocity Control", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
@@ -465,14 +587,97 @@ private fun TelemetryRow(label: String, value: String) {
     }
 }
 
+/**
+ * Self-recentering infinite slider: rests at center (0.5), dragging right scales up to 12x,
+ * dragging left scales down to 1/12x, and releasing snaps thumb back to center with the new value
+ * anchored so the user can keep increasing/decreasing indefinitely.
+ */
 @Composable
-private fun LabeledSlider(label: String, value: Float, onValueChange: (Float) -> Unit) {
-    Column {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+private fun InfiniteValueSlider(
+    bodyId: Long,
+    label: String,
+    currentValue: Double,
+    minFloor: Double = 1e-16,
+    seedIfZero: Double = 1.0,
+    snapZeroBelow: Double = -1.0,
+    stepMultiplierPerHalfDrag: Double = 12.0,
+    testTagPrefix: String,
+    onValueChange: (Double) -> Unit
+) {
+    var sliderPos by remember(bodyId) { mutableFloatStateOf(0.5f) }
+    var isDragging by remember(bodyId) { mutableStateOf(false) }
+    var anchorValue by remember(bodyId) { mutableDoubleStateOf(currentValue) }
+
+    LaunchedEffect(currentValue, isDragging) {
+        if (!isDragging) {
+            anchorValue = currentValue
+        }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = TextPrimary,
+                modifier = Modifier.weight(1f)
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = PanelElevated,
+                    border = BorderStroke(1.dp, HairlineBorder),
+                    modifier = Modifier
+                        .clickable {
+                            val base = if (currentValue <= minFloor) seedIfZero else currentValue
+                            val next = (base * 0.5).let {
+                                if (snapZeroBelow > 0.0 && it < snapZeroBelow) 0.0 else it.coerceAtLeast(minFloor)
+                            }
+                            anchorValue = next
+                            onValueChange(next)
+                        }
+                        .testTag("${testTagPrefix}_half")
+                ) {
+                    Text("÷2", style = MaterialTheme.typography.labelSmall, color = TextSecondary, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                }
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = PanelElevated,
+                    border = BorderStroke(1.dp, AmberStar.copy(alpha = 0.55f)),
+                    modifier = Modifier
+                        .clickable {
+                            val base = if (currentValue <= minFloor) seedIfZero else currentValue
+                            val next = (base * 2.0).coerceAtLeast(minFloor)
+                            anchorValue = next
+                            onValueChange(next)
+                        }
+                        .testTag("${testTagPrefix}_double")
+                ) {
+                    Text("×2", style = MaterialTheme.typography.labelSmall, color = AmberWarm, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                }
+            }
+        }
         Slider(
-            value = value.coerceIn(0f, 1f),
-            onValueChange = onValueChange,
-            modifier = Modifier.height(26.dp),
+            value = sliderPos,
+            onValueChange = { pos ->
+                isDragging = true
+                sliderPos = pos
+                val base = if (anchorValue <= minFloor) seedIfZero else anchorValue
+                val deltaNorm = (pos - 0.5f) * 2.0
+                val raw = base * kotlin.math.exp(ln(stepMultiplierPerHalfDrag) * deltaNorm)
+                val next = if (snapZeroBelow > 0.0 && raw < snapZeroBelow) 0.0 else raw.coerceAtLeast(minFloor)
+                onValueChange(next)
+            },
+            onValueChangeFinished = {
+                isDragging = false
+                sliderPos = 0.5f
+                anchorValue = currentValue
+            },
+            modifier = Modifier.height(26.dp).testTag(testTagPrefix),
             colors = SliderDefaults.colors(
                 thumbColor = AmberStar,
                 activeTrackColor = AmberStar,
@@ -483,11 +688,36 @@ private fun LabeledSlider(label: String, value: Float, onValueChange: (Float) ->
 }
 
 private fun formatRadiusKm(km: Double): String {
-    return if (km >= 100_000) String.format("%.2fM km", km / 1_000_000.0)
-    else String.format("%.0f km", km)
+    return when {
+        km >= 1_000_000_000.0 -> String.format("%.2fB km", km / 1_000_000_000.0)
+        km >= 1_000_000.0 -> String.format("%.2fM km", km / 1_000_000.0)
+        km >= 10_000.0 -> String.format("%.0fk km", km / 1_000.0)
+        else -> String.format("%.0f km", km)
+    }
 }
 
 private fun formatMass(mSolar: Double): String {
-    return if (mSolar >= 0.05) String.format("%.2f M☉", mSolar)
-    else String.format("%.2f M⊕", mSolar / AstroConstants.EARTH_MASS_SOLAR)
+    return when {
+        mSolar >= 1_000_000.0 -> String.format("%.2e M☉", mSolar)
+        mSolar >= 1000.0 -> String.format("%.0f M☉", mSolar)
+        mSolar >= 0.05 -> String.format("%.2f M☉", mSolar)
+        else -> String.format("%.2f M⊕", mSolar / AstroConstants.EARTH_MASS_SOLAR)
+    }
+}
+
+private fun formatTemperatureK(tempK: Double): String {
+    return when {
+        tempK >= 1_000_000.0 -> String.format("%.2e K", tempK)
+        tempK >= 100_000.0 -> String.format("%.0f K", tempK)
+        else -> String.format("%.0f K (%.0f °C)", tempK, tempK - 273.15)
+    }
+}
+
+private fun formatCompactDouble(v: Double): String {
+    return when {
+        v >= 1_000_000.0 -> String.format("%.2e", v)
+        v >= 1000.0 -> String.format("%.0f", v)
+        v >= 1.0 -> String.format("%.2f", v)
+        else -> String.format("%.3f", v)
+    }
 }

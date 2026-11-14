@@ -13,6 +13,7 @@
     <string name="cd_focus_body">Focus camera on selected object</string>
     <string name="cd_delete_body">Delete selected object</string>
     <string name="cd_mode_select">Select and orbit mode</string>
+    <string name="cd_mode_drag">Drag and fling objects mode</string>
     <string name="cd_mode_spawn">Spawn celestial bodies</string>
     <string name="cd_mode_slingshot">Slingshot launch mode</string>
     <string name="cd_mode_weapons">Cosmic weapons and events</string>

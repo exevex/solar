@@ -205,6 +205,10 @@ object ShaderLibrary {
 
         uniform mat4 uModel;
         uniform mat4 uViewProj;
+        uniform vec3 uBodyPos;
+        uniform float uBodyRadius;
+        uniform vec3 uTidalDir;
+        uniform float uTidalStretch;
         $LOG_DEPTH_VERT
 
         out vec3 vLocalPos;
@@ -214,9 +218,27 @@ object ShaderLibrary {
         void main() {
             vLocalPos = aPos;
             vec4 world = uModel * vec4(aPos, 1.0);
-            vWorldPos = world.xyz;
-            vWorldNormal = normalize(mat3(uModel) * aNormal);
-            gl_Position = applyLogDepth(uViewProj * world);
+            vec3 wPos = world.xyz;
+            vec3 wNorm = normalize(mat3(uModel) * aNormal);
+
+            if (uTidalStretch > 0.001) {
+                vec3 dir = normalize(uTidalDir);
+                vec3 rel = wPos - uBodyPos;
+                float along = dot(rel, dir);
+                vec3 perp = rel - dir * along;
+                float alongNorm = along / max(uBodyRadius, 1e-5);
+                // Asymmetric teardrop spaghettification pulling toward the Black Hole
+                float stretchAlong = alongNorm > 0.0
+                    ? (1.0 + uTidalStretch * (1.25 + 0.72 * alongNorm))
+                    : (1.0 + uTidalStretch * 0.58);
+                float pinch = 1.0 / sqrt(1.0 + uTidalStretch * (1.05 + max(alongNorm, 0.0) * 0.85));
+                wPos = uBodyPos + dir * (along * stretchAlong) + perp * pinch;
+                wNorm = normalize(wNorm / max(pinch, 0.25) - dir * (dot(wNorm, dir) * (1.0 - 1.0 / max(stretchAlong, 1.0))));
+            }
+
+            vWorldPos = wPos;
+            vWorldNormal = wNorm;
+            gl_Position = applyLogDepth(uViewProj * vec4(wPos, 1.0));
         }
     """
 
@@ -230,6 +252,7 @@ object ShaderLibrary {
         uniform vec3 uBodyPos;
         uniform float uBodyRadius;
         uniform int uPlanetStyle; // 0=EarthLike, 1=Terrestrial/Mars/Moon, 2=GasGiant, 3=IceGiant, 4=Comet
+        uniform int uBodyArchetype; // 0..18 NASA-accurate BodyArchetype IDs
         uniform float uSeed;
         uniform float uTime;
         uniform int uFbmOctaves;
@@ -239,6 +262,7 @@ object ShaderLibrary {
         uniform int uHasClouds;
         uniform int uHasCityLights;
         uniform float uCrustHeat;
+        uniform float uTidalStress;
         uniform int uEnableAtmo;
         uniform int uEnableEclipses;
 
@@ -265,6 +289,21 @@ object ShaderLibrary {
 
         out vec4 fragColor;
         $NOISE_GLSL
+
+        // Fast procedural impact crater field on unit sphere
+        float craterField(vec3 p, float scale, float seedOff) {
+            vec3 sp = p * scale + vec3(seedOff);
+            vec3 cell = floor(sp);
+            vec3 f = fract(sp) - 0.5;
+            float rnd = hash31(cell);
+            if (rnd < 0.42) return 0.0;
+            vec3 jit = vec3(hash31(cell + 1.1), hash31(cell + 2.3), hash31(cell + 3.7)) - 0.5;
+            float d = length(f - jit * 0.45);
+            float rad = 0.16 + 0.24 * fract(rnd * 17.3);
+            float rim = exp(-pow((d - rad) / (rad * 0.22), 2.0)) * 0.45;
+            float bowl = -(1.0 - smoothstep(0.0, rad, d)) * 0.55;
+            return bowl + rim;
+        }
 
         float computeEclipseShadow(vec3 fragPos, vec3 toLightDir, float lightDist) {
             if (uEnableEclipses == 0) return 1.0;
@@ -310,91 +349,210 @@ object ShaderLibrary {
             float cityMask = 0.0;
             float cloudAlpha = 0.0;
 
-            if (uPlanetStyle == 0) {
-                // Earth-like: continents, bathymetry, mountain ridges, polar ice, clouds, city lights
-                float cont = fbm(p * 2.6 + vec3(uSeed), uFbmOctaves);
-                float detail = fbm(p * 11.5 + vec3(uSeed * 2.1), max(2, uFbmOctaves - 1));
+            if (uBodyArchetype == 5 || uPlanetStyle == 0) {
+                // NASA EARTH (5) & OCEANIC TERRA (0): continents, reefs, mountain chains, polar caps, clouds, city lights
+                float cont = fbm(p * 2.55 + vec3(uSeed), uFbmOctaves);
+                float detail = fbm(p * 12.0 + vec3(uSeed * 2.1), max(2, uFbmOctaves - 1));
+                float ridge = 1.0 - abs(noise3(p * 16.0 + vec3(uSeed)) * 2.0 - 1.0);
                 float lat = abs(p.y);
-                float ice = smoothstep(0.76, 0.88, lat + (detail - 0.5) * 0.14);
-                if (cont < 0.50) {
-                    // Ocean with coastal shelf
-                    float depth = smoothstep(0.32, 0.50, cont);
-                    baseColor = mix(vec3(0.03, 0.12, 0.34), vec3(0.08, 0.35, 0.58), depth);
-                    roughness = 0.18;
-                    specStrength = 0.75;
-                    height = 0.45;
+                float ice = smoothstep(0.77, 0.88, lat + (detail - 0.5) * 0.14);
+                float landThresh = (uBodyArchetype == 5) ? 0.51 : 0.49;
+                if (cont < landThresh) {
+                    float shelf = smoothstep(landThresh - 0.16, landThresh, cont);
+                    float abyss = smoothstep(0.25, landThresh - 0.08, cont);
+                    baseColor = mix(vec3(0.015, 0.06, 0.22), vec3(0.04, 0.22, 0.48), abyss);
+                    baseColor = mix(baseColor, vec3(0.08, 0.44, 0.62), shelf * 0.7);
+                    roughness = 0.16;
+                    specStrength = 0.85;
+                    height = 0.42;
                 } else {
-                    float elev = (cont - 0.50) * 2.0;
-                    vec3 lowland = mix(vec3(0.11, 0.36, 0.15), vec3(0.56, 0.48, 0.28), smoothstep(0.45, 0.75, detail));
-                    vec3 alpine = vec3(0.42, 0.38, 0.35);
-                    baseColor = mix(lowland, alpine, smoothstep(0.45, 0.85, elev));
-                    baseColor = mix(baseColor, vec3(0.92, 0.95, 0.98), smoothstep(0.75, 0.92, elev));
-                    roughness = 0.85;
-                    specStrength = 0.04;
-                    height = 0.5 + elev * 0.45;
-                    if (uHasCityLights == 1 && elev < 0.48 && lat < 0.72) {
-                        float urban = noise3(p * 34.0 + vec3(uSeed * 3.0));
-                        cityMask = smoothstep(0.73, 0.88, urban) * (1.0 - ice);
+                    float elev = (cont - landThresh) / (1.0 - landThresh);
+                    float aridity = smoothstep(0.18, 0.42, 1.0 - lat) * smoothstep(0.45, 0.72, detail);
+                    vec3 forest = vec3(0.09, 0.30, 0.12);
+                    vec3 savanna = vec3(0.42, 0.44, 0.21);
+                    vec3 desert = vec3(0.68, 0.56, 0.36);
+                    vec3 lowland = mix(mix(forest, savanna, detail), desert, aridity * 0.85);
+                    vec3 mountain = vec3(0.38, 0.35, 0.32);
+                    baseColor = mix(lowland, mountain, smoothstep(0.40, 0.78, elev + ridge * 0.18));
+                    baseColor = mix(baseColor, vec3(0.92, 0.95, 0.98), smoothstep(0.72, 0.92, elev + ridge * 0.2));
+                    roughness = 0.88;
+                    specStrength = 0.03;
+                    height = 0.5 + elev * 0.45 + ridge * 0.08;
+                    if (uHasCityLights == 1 && elev < 0.46 && lat < 0.72) {
+                        float urban = noise3(p * 36.0 + vec3(uSeed * 3.0)) * smoothstep(0.0, 0.25, elev);
+                        cityMask = smoothstep(0.66, 0.84, urban) * (1.0 - ice);
                     }
                 }
                 baseColor = mix(baseColor, vec3(0.92, 0.95, 0.99), ice);
                 if (ice > 0.5) { roughness = 0.45; specStrength = 0.25; }
 
                 if (uHasClouds == 1) {
-                    vec3 cPos = p * 3.4 + vec3(uTime * 0.03, 0.0, -uTime * 0.02);
-                    float cWarp = fbm(cPos + vec3(fbm(cPos * 1.4, 2)), uFbmOctaves);
-                    cloudAlpha = smoothstep(0.49, 0.76, cWarp) * 0.82;
+                    vec3 cPos = p * 3.6 + vec3(uTime * 0.035, 0.0, -uTime * 0.022);
+                    float cWarp = fbm(cPos + vec3(fbm(cPos * 1.6, 2) * 0.8), uFbmOctaves);
+                    cloudAlpha = smoothstep(0.48, 0.75, cWarp) * 0.86;
                 }
-            } else if (uPlanetStyle == 1) {
-                // Terrestrial (Mercury, Venus, Mars, Moons)
-                float terrain = fbm(p * 3.8 + vec3(uSeed), uFbmOctaves);
-                float micro = fbm(p * 16.0 + vec3(uSeed * 1.7), max(2, uFbmOctaves - 1));
-                float polar = smoothstep(0.84, 0.94, abs(p.y) + (micro - 0.5) * 0.08);
-                baseColor = uAlbedo * (0.62 + terrain * 0.65 + (micro - 0.5) * 0.25);
-                if (uHasClouds == 1) {
-                    // Venus sulfuric cloud bands
-                    float swirl = fbm(vec3(p.x * 2.5, p.y * 5.5, p.z * 2.5) + vec3(uTime * 0.05, 0.0, 0.0), uFbmOctaves);
-                    baseColor = mix(baseColor, uAtmoColor * (0.75 + 0.4 * swirl), 0.78);
+            } else if (uBodyArchetype == 6) {
+                // NASA MARS: Rusty iron-oxide highlands, dark basaltic Syrtis Major plains, Valles Marineris canyon, white polar ice caps
+                float highlands = fbm(p * 3.1 + vec3(7.21), uFbmOctaves);
+                float micro = fbm(p * 18.0 + vec3(14.4), max(2, uFbmOctaves - 1));
+                float basalt = smoothstep(0.46, 0.68, fbm(p * 2.2 + vec3(1.8), 3));
+                float craters = craterField(p, 9.0, 6.0) + craterField(p, 18.0, 12.0) * 0.5;
+                // Equatorial Valles Marineris rift scar
+                float canyonMask = exp(-pow(p.y * 12.0 + sin(p.x * 4.0) * 0.4, 2.0)) * smoothstep(0.2, 0.8, p.x);
+                vec3 dust = mix(vec3(0.78, 0.34, 0.18), vec3(0.88, 0.49, 0.28), highlands);
+                vec3 darkBasalt = vec3(0.32, 0.19, 0.14);
+                baseColor = mix(dust, darkBasalt, basalt * 0.65);
+                baseColor = mix(baseColor, vec3(0.22, 0.11, 0.08), canyonMask * 0.65);
+                baseColor *= (0.85 + 0.30 * micro + craters * 0.35);
+                float polar = smoothstep(0.85, 0.93, abs(p.y) + (micro - 0.5) * 0.07);
+                baseColor = mix(baseColor, vec3(0.94, 0.92, 0.90), polar);
+                height = highlands * 0.65 + craters * 0.25 - canyonMask * 0.3;
+                roughness = 0.86;
+            } else if (uBodyArchetype == 7 || uBodyArchetype == 9) {
+                // MERCURY (7) & LUNA (9): Lunar maria basins vs highlands + crisp rayed craters
+                float maria = smoothstep(0.44, 0.66, fbm(p * 2.4 + vec3(uSeed), uFbmOctaves));
+                float regolith = fbm(p * 16.0 + vec3(uSeed * 1.4), max(2, uFbmOctaves - 1));
+                float cLarge = craterField(p, 7.5, uSeed);
+                float cMed = craterField(p, 15.0, uSeed + 4.1) * 0.7;
+                float cFine = craterField(p, 28.0, uSeed + 9.3) * 0.4;
+                vec3 highlandCol = (uBodyArchetype == 9) ? vec3(0.76, 0.75, 0.72) : vec3(0.62, 0.58, 0.54);
+                vec3 mariaCol = (uBodyArchetype == 9) ? vec3(0.30, 0.31, 0.33) : vec3(0.36, 0.34, 0.32);
+                baseColor = mix(highlandCol, mariaCol, maria * (uBodyArchetype == 9 ? 0.88 : 0.55));
+                baseColor *= (0.78 + regolith * 0.38 + (cLarge + cMed + cFine) * 0.45);
+                height = 0.5 + (cLarge + cMed + cFine) * 0.45 + regolith * 0.15;
+                roughness = 0.92;
+            } else if (uBodyArchetype == 8) {
+                // VENUS: Creamy sulfuric acid clouds with characteristic equatorial Y-wave bands
+                float uvy = sin(p.y * 8.0 + fbm(p * 4.0 + vec3(uTime * 0.04, 0.0, 0.0), uFbmOctaves) * 4.5);
+                float yWave = fbm(vec3(p.x * 2.2 - uTime * 0.06, p.y * 5.2, p.z * 2.2), uFbmOctaves);
+                vec3 cream = vec3(0.95, 0.84, 0.56);
+                vec3 sulfur = vec3(0.76, 0.55, 0.28);
+                baseColor = mix(sulfur, cream, smoothstep(0.28, 0.76, yWave + uvy * 0.12));
+                roughness = 0.55;
+                specStrength = 0.12;
+            } else if (uBodyArchetype == 10 || uPlanetStyle == 2) {
+                // NASA JUPITER (10) & GAS GIANT (2): Zonal jets, shear eddies, white ovals & Great Red Spot
+                float shear = fbm(vec3(p.x * 4.5 - uTime * 0.025, p.y * 12.0, p.z * 4.5) + vec3(uSeed), uFbmOctaves);
+                float turb = fbm(p * 9.0 + vec3(uSeed, uTime * 0.02, shear * 1.8), max(2, uFbmOctaves - 1));
+                float beltPhase = p.y * 19.0 + shear * 2.8 + turb * 1.2 + uSeed * 0.2;
+                float band1 = sin(beltPhase) * 0.5 + 0.5;
+                float band2 = sin(beltPhase * 2.4 + 1.1) * 0.5 + 0.5;
+
+                if (uBodyArchetype == 10) {
+                    vec3 zoneCream = vec3(0.93, 0.88, 0.78);
+                    vec3 eqBeltRust = vec3(0.68, 0.36, 0.21);
+                    vec3 ochre = vec3(0.84, 0.66, 0.44);
+                    vec3 polarSlate = vec3(0.46, 0.44, 0.48);
+                    baseColor = mix(eqBeltRust, zoneCream, band1);
+                    baseColor = mix(baseColor, ochre, band2 * 0.45);
+                    baseColor = mix(baseColor, polarSlate, smoothstep(0.68, 0.94, abs(p.y)) * 0.72);
+                    // Great Red Spot at ~22 deg south
+                    vec3 grsCenter = normalize(vec3(0.86, -0.37, 0.34));
+                    vec3 dSpot = p - grsCenter;
+                    float spotR = length(vec3(dSpot.x * 0.72, dSpot.y * 1.85, dSpot.z));
+                    float grsMask = 1.0 - smoothstep(0.05, 0.24, spotR);
+                    float grsSwirl = sin(spotR * 36.0 - uTime * 0.8) * 0.5 + 0.5;
+                    vec3 grsCol = mix(vec3(0.82, 0.26, 0.14), vec3(0.95, 0.48, 0.28), grsSwirl);
+                    baseColor = mix(baseColor, grsCol, grsMask * 0.88);
                 } else {
-                    // Mars-like polar frost subtle tint when atmo > 0.05
-                    if (uAtmoDensity > 0.05) {
-                        baseColor = mix(baseColor, vec3(0.90, 0.88, 0.86), polar * 0.85);
+                    vec3 c1 = uAlbedo * 1.18;
+                    vec3 c2 = uAlbedo * vec3(0.66, 0.56, 0.48);
+                    vec3 c3 = mix(uAlbedo, vec3(0.94, 0.88, 0.76), 0.55);
+                    baseColor = mix(c2, c1, band1);
+                    baseColor = mix(baseColor, c3, band2 * 0.38);
+                }
+                roughness = 0.62;
+            } else if (uBodyArchetype == 11) {
+                // NASA SATURN: Silky golden-butterscotch bands + North Polar Hexagon cool tint
+                float turb = fbm(vec3(p.x * 3.0, p.y * 10.0, p.z * 3.0) + vec3(uSeed), uFbmOctaves);
+                float band = sin(p.y * 22.0 + turb * 1.6) * 0.5 + 0.5;
+                vec3 cream = vec3(0.94, 0.88, 0.70);
+                vec3 butter = vec3(0.80, 0.69, 0.46);
+                baseColor = mix(butter, cream, band);
+                // Polar hexagon teal tint
+                float northPolar = smoothstep(0.78, 0.95, p.y);
+                baseColor = mix(baseColor, vec3(0.45, 0.58, 0.56), northPolar * 0.65);
+                roughness = 0.58;
+            } else if (uBodyArchetype == 12 || uBodyArchetype == 13 || uPlanetStyle == 3) {
+                // URANUS (12), NEPTUNE (13), ICE GIANT (3)
+                float wisp = fbm(vec3(p.x * 2.4 + uTime * 0.035, p.y * 11.0, p.z * 2.4) + vec3(uSeed), uFbmOctaves);
+                float band = sin(p.y * 13.0 + wisp * 2.0) * 0.5 + 0.5;
+                if (uBodyArchetype == 12) {
+                    baseColor = mix(vec3(0.46, 0.80, 0.86), vec3(0.62, 0.89, 0.93), band);
+                    baseColor = mix(baseColor, vec3(0.78, 0.94, 0.96), smoothstep(0.65, 0.95, abs(p.y)) * 0.35);
+                } else {
+                    baseColor = mix(vec3(0.14, 0.32, 0.78), vec3(0.24, 0.50, 0.95), band);
+                    // High-altitude white methane cirrus streaks
+                    float cirrus = smoothstep(0.68, 0.86, wisp) * (1.0 - abs(p.y) * 0.6);
+                    baseColor = mix(baseColor, vec3(0.88, 0.95, 1.0), cirrus * 0.62);
+                    if (uBodyArchetype == 13) {
+                        vec3 gds = normalize(vec3(0.75, -0.32, 0.58));
+                        float d = length((p - gds) * vec3(0.8, 1.6, 1.0));
+                        baseColor = mix(baseColor, vec3(0.06, 0.14, 0.42), (1.0 - smoothstep(0.05, 0.20, d)) * 0.75);
                     }
                 }
-                height = terrain * 0.7 + micro * 0.3;
-            } else if (uPlanetStyle == 2) {
-                // Gas Giant (Jupiter / Saturn): Zonal jet bands + Kelvin-Helmholtz eddies + Great Spot
-                float turb = fbm(p * 5.5 + vec3(uSeed, uTime * 0.02, 0.0), uFbmOctaves);
-                float latBand = sin(p.y * 24.0 + turb * 4.5 + uSeed) * 0.5 + 0.5;
-                float fineBand = sin(p.y * 54.0 - turb * 3.0) * 0.5 + 0.5;
-                vec3 c1 = uAlbedo * 1.18;
-                vec3 c2 = uAlbedo * vec3(0.68, 0.58, 0.50);
-                vec3 c3 = mix(uAlbedo, vec3(0.92, 0.86, 0.74), 0.55);
-                baseColor = mix(c2, c1, latBand);
-                baseColor = mix(baseColor, c3, fineBand * 0.35);
-                // Great Red Spot style anticyclonic vortex
-                vec3 spotCenter = normalize(vec3(0.88, -0.32, 0.35));
-                vec3 dSpot = p - spotCenter;
-                float spotDist = length(vec3(dSpot.x * 0.75, dSpot.y * 1.7, dSpot.z));
-                float spotMask = smoothstep(0.26, 0.05, spotDist);
-                baseColor = mix(baseColor, uAlbedo * vec3(1.15, 0.52, 0.34), spotMask * 0.78);
-                roughness = 0.65;
-            } else if (uPlanetStyle == 3) {
-                // Ice Giant (Uranus / Neptune): Smooth methane gradient + wispy high-altitude streaks
-                float wisp = fbm(vec3(p.x * 2.0 + uTime * 0.03, p.y * 10.0, p.z * 2.0) + vec3(uSeed), uFbmOctaves);
-                float band = sin(p.y * 12.0 + wisp * 2.2) * 0.5 + 0.5;
-                baseColor = mix(uAlbedo * 0.82, uAlbedo * 1.15, band);
-                baseColor = mix(baseColor, vec3(0.85, 0.95, 1.0), smoothstep(0.72, 0.88, wisp) * 0.35);
-                roughness = 0.48;
-                specStrength = 0.22;
-            } else {
+                roughness = 0.45;
+                specStrength = 0.25;
+            } else if (uBodyArchetype == 14) {
+                // NASA PLUTO: Bright nitrogen-ice Sputnik Planitia heart vs dark reddish tholin Cthulhu Macula
+                float terrain = fbm(p * 4.0 + vec3(uSeed), uFbmOctaves);
+                float heart = 1.0 - smoothstep(0.12, 0.36, length((p - normalize(vec3(0.85, 0.08, 0.52))) * vec3(1.0, 1.25, 0.85)));
+                float tholin = smoothstep(0.42, 0.70, fbm(p * 3.0 + vec3(2.2), 3)) * exp(-pow(p.y * 2.5, 2.0));
+                vec3 nitrogenIce = vec3(0.92, 0.88, 0.82);
+                vec3 crust = mix(vec3(0.68, 0.58, 0.50), vec3(0.34, 0.18, 0.14), tholin);
+                baseColor = mix(crust * (0.78 + terrain * 0.4), nitrogenIce, heart * 0.92);
+                height = terrain * 0.7;
+            } else if (uBodyArchetype == 15) {
+                // NASA IO: Sulfur yellow/orange/red with dark volcanic calderas
+                float sulfur = fbm(p * 5.2 + vec3(uSeed), uFbmOctaves);
+                float vents = smoothstep(0.72, 0.88, fbm(p * 12.0 + vec3(3.1), 3));
+                baseColor = mix(vec3(0.92, 0.78, 0.24), vec3(0.86, 0.42, 0.14), sulfur);
+                baseColor = mix(baseColor, vec3(0.14, 0.10, 0.08), vents);
+                height = sulfur * 0.6;
+            } else if (uBodyArchetype == 16 || uBodyArchetype == 18) {
+                // NASA EUROPA (16) & ENCELADUS (18): Bright water-ice shell with reddish tectonic lineae / blue tiger stripes
+                float iceVar = fbm(p * 4.5 + vec3(uSeed), uFbmOctaves);
+                float crackA = 1.0 - abs(noise3(p * 9.5 + vec3(uSeed)) * 2.0 - 1.0);
+                float crackB = 1.0 - abs(noise3(p * 15.0 + vec3(uSeed + 5.2)) * 2.0 - 1.0);
+                float lineae = smoothstep(0.84, 0.98, max(crackA, crackB));
+                if (uBodyArchetype == 16) {
+                    baseColor = mix(vec3(0.84, 0.82, 0.76), vec3(0.94, 0.93, 0.89), iceVar);
+                    baseColor = mix(baseColor, vec3(0.56, 0.34, 0.24), lineae * 0.75);
+                } else {
+                    baseColor = mix(vec3(0.88, 0.93, 0.98), vec3(0.98, 0.99, 1.0), iceVar);
+                    float southTiger = lineae * (1.0 - smoothstep(-0.85, -0.35, p.y));
+                    baseColor = mix(baseColor, vec3(0.32, 0.68, 0.94), southTiger * 0.82);
+                }
+                roughness = 0.35;
+                specStrength = 0.42;
+                height = 0.6 - lineae * 0.25;
+            } else if (uBodyArchetype == 17) {
+                // NASA TITAN: Dense orange-amber nitrogen-methane photochemical haze
+                float haze = fbm(vec3(p.x * 2.5, p.y * 6.0, p.z * 2.5) + vec3(uSeed, uTime * 0.02, 0.0), uFbmOctaves);
+                baseColor = mix(vec3(0.76, 0.50, 0.20), vec3(0.92, 0.70, 0.34), haze);
+                roughness = 0.55;
+            } else if (uPlanetStyle == 4 || uBodyArchetype == 4) {
                 // Comet icy nucleus
                 float crag = fbm(p * 8.0 + vec3(uSeed), 3);
                 baseColor = mix(vec3(0.28, 0.32, 0.38), vec3(0.75, 0.88, 0.98), smoothstep(0.45, 0.75, crag));
                 height = crag;
+            } else {
+                // Generic Terrestrial / Moon / Rocky / Exoplanets
+                float terrain = fbm(p * 3.8 + vec3(uSeed), uFbmOctaves);
+                float micro = fbm(p * 16.0 + vec3(uSeed * 1.7), max(2, uFbmOctaves - 1));
+                float craters = craterField(p, 10.0, uSeed);
+                float polar = smoothstep(0.84, 0.94, abs(p.y) + (micro - 0.5) * 0.08);
+                baseColor = uAlbedo * (0.64 + terrain * 0.62 + (micro - 0.5) * 0.25 + craters * 0.3);
+                if (uHasClouds == 1) {
+                    float swirl = fbm(vec3(p.x * 2.5, p.y * 5.5, p.z * 2.5) + vec3(uTime * 0.05, 0.0, 0.0), uFbmOctaves);
+                    baseColor = mix(baseColor, uAtmoColor * (0.75 + 0.4 * swirl), 0.78);
+                } else if (uAtmoDensity > 0.05) {
+                    baseColor = mix(baseColor, vec3(0.90, 0.88, 0.86), polar * 0.85);
+                }
+                height = terrain * 0.65 + micro * 0.25 + craters * 0.25;
             }
 
-            // Apply procedural surface craters + glowing impact craters
+            // Apply procedural impact craters + glowing impact craters
             float craterLava = 0.0;
             for (int c = 0; c < 8; c++) {
                 if (c >= uCraterCount) break;
@@ -402,7 +560,7 @@ object ShaderLibrary {
                 float rad = uCraters[c].w;
                 if (angDist < rad * 1.25) {
                     float rim = exp(-pow((angDist - rad) / (rad * 0.16), 2.0));
-                    float bowl = smoothstep(rad, 0.0, angDist);
+                    float bowl = 1.0 - smoothstep(0.0, rad, angDist);
                     baseColor = mix(baseColor, baseColor * 0.52, bowl * 0.7);
                     baseColor += vec3(0.18, 0.16, 0.14) * rim;
                     height -= bowl * 0.35 - rim * 0.2;
@@ -415,12 +573,11 @@ object ShaderLibrary {
             vec3 dpdy = dFdy(vWorldPos);
             float dhdx = dFdx(height);
             float dhdy = dFdy(height);
-            vec3 bumpN = normalize(N - (dpdx * dhdx + dpdy * dhdy) * 1.2);
-            N = mix(N, bumpN, 0.45);
+            vec3 bumpN = normalize(N - (dpdx * dhdx + dpdy * dhdy) * 1.35);
+            N = mix(N, bumpN, 0.48);
 
             // Multi-star PBR lighting + shadows + clouds
-            vec3 litColor = baseColor * 0.045; // faint cosmic ambient
-            vec3 nightCityAccum = vec3(0.0);
+            vec3 litColor = baseColor * 0.05; // faint cosmic ambient
             float dayFactorMax = 0.0;
 
             for (int s = 0; s < 4; s++) {
@@ -435,7 +592,6 @@ object ShaderLibrary {
                 float atten = uStarIntensity[s] / (1.0 + 0.015 * starDist * starDist);
                 vec3 starRad = uStarColor[s] * atten * shadow;
 
-                // Diffuse + Blinn-Phong specular
                 vec3 surfAlbedo = mix(baseColor, vec3(0.95, 0.97, 1.0), cloudAlpha);
                 litColor += surfAlbedo * starRad * ndl;
 
@@ -457,23 +613,24 @@ object ShaderLibrary {
 
             // Night-side city lights on Earth-like worlds
             if (cityMask > 0.01) {
-                float nightWeight = smoothstep(0.12, -0.18, dayFactorMax);
+                float nightWeight = 1.0 - smoothstep(-0.18, 0.12, dayFactorMax);
                 litColor += vec3(1.0, 0.78, 0.42) * cityMask * nightWeight * (1.0 - cloudAlpha * 0.7) * 1.35;
             }
 
-            // Molten crust magma cracks & impact glow (HDR overbright for bloom!)
-            float lavaPattern = smoothstep(0.54, 0.76, fbm(p * 12.0 + vec3(uSeed), 3));
-            float totalHeat = max(uCrustHeat * (0.45 + 0.85 * lavaPattern), craterLava);
+            // Molten crust magma cracks & tidal shear heating glow (HDR overbright for bloom!)
+            float lavaPattern = smoothstep(0.50, 0.74, fbm(p * 12.0 + vec3(uSeed), 3));
+            float heatDriver = max(uCrustHeat, uTidalStress * 0.95);
+            float totalHeat = max(heatDriver * (0.48 + 0.88 * lavaPattern), craterLava);
             if (totalHeat > 0.01) {
-                vec3 lavaCol = mix(vec3(1.3, 0.22, 0.02), vec3(2.4, 0.95, 0.25), totalHeat);
-                litColor += lavaCol * totalHeat * 1.6;
+                vec3 lavaCol = mix(vec3(1.35, 0.24, 0.02), vec3(2.5, 1.0, 0.28), totalHeat);
+                litColor += lavaCol * totalHeat * 1.65;
             }
 
             fragColor = vec4(litColor, 1.0);
         }
     """
 
-    // 3. HDR STAR / SUN / WHITE DWARF / NEUTRON STAR SHADER
+    // 3. HDR STAR / SUN / WHITE DWARF / NEUTRON STAR SHADER (with tidal spaghettification stretch!)
     const val STAR_VS = """#version 300 es
         precision highp float;
         layout(location = 0) in vec3 aPos;
@@ -482,6 +639,10 @@ object ShaderLibrary {
 
         uniform mat4 uModel;
         uniform mat4 uViewProj;
+        uniform vec3 uBodyPos;
+        uniform float uBodyRadius;
+        uniform vec3 uTidalDir;
+        uniform float uTidalStretch;
         $LOG_DEPTH_VERT
 
         out vec3 vLocalPos;
@@ -491,9 +652,27 @@ object ShaderLibrary {
         void main() {
             vLocalPos = aPos;
             vec4 w = uModel * vec4(aPos, 1.0);
-            vWorldPos = w.xyz;
-            vWorldNormal = normalize(mat3(uModel) * aNormal);
-            gl_Position = applyLogDepth(uViewProj * w);
+            vec3 wPos = w.xyz;
+            vec3 wNorm = normalize(mat3(uModel) * aNormal);
+
+            if (uTidalStretch > 0.001) {
+                vec3 dir = normalize(uTidalDir);
+                vec3 rel = wPos - uBodyPos;
+                float along = dot(rel, dir);
+                vec3 perp = rel - dir * along;
+                float alongNorm = along / max(uBodyRadius, 1e-5);
+                // Dramatic tidal elongation pulling the star thin into a stream toward the black hole
+                float stretchAlong = alongNorm > 0.0
+                    ? (1.0 + uTidalStretch * (1.45 + 0.85 * alongNorm))
+                    : (1.0 + uTidalStretch * 0.65);
+                float pinch = 1.0 / sqrt(1.0 + uTidalStretch * (1.15 + max(alongNorm, 0.0) * 0.95));
+                wPos = uBodyPos + dir * (along * stretchAlong) + perp * pinch;
+                wNorm = normalize(wNorm / max(pinch, 0.25) - dir * (dot(wNorm, dir) * (1.0 - 1.0 / max(stretchAlong, 1.0))));
+            }
+
+            vWorldPos = wPos;
+            vWorldNormal = wNorm;
+            gl_Position = applyLogDepth(uViewProj * vec4(wPos, 1.0));
         }
     """
 
@@ -517,16 +696,20 @@ object ShaderLibrary {
             vec3 N = normalize(vWorldNormal);
             vec3 V = normalize(uCamPos - vWorldPos);
 
-            float gran = fbm(p * 8.0 + vec3(uTime * 0.18, -uTime * 0.12, uSeed), 4);
-            float spots = smoothstep(0.68, 0.82, fbm(p * 3.5 + vec3(uSeed * 2.0, uTime * 0.04, 0.0), 3));
-            float limb = pow(max(dot(N, V), 0.05), 0.42);
+            float superGran = fbm(p * 6.5 + vec3(uTime * 0.14, -uTime * 0.10, uSeed), 4);
+            float fineCell = fbm(p * 19.0 + vec3(-uTime * 0.22, uTime * 0.16, uSeed * 1.9), 3);
+            float gran = mix(superGran, fineCell, 0.42);
+            float spots = smoothstep(0.70, 0.85, fbm(p * 4.2 + vec3(uSeed * 2.0, uTime * 0.03, 0.0), 3));
+            float ndv = max(dot(N, V), 0.04);
+            float limb = pow(ndv, 0.46);
+            float chromosphere = pow(1.0 - ndv, 3.2) * 0.9;
 
-            vec3 hotCore = uStarColor * (1.25 + gran * 0.75) * uIntensity;
-            vec3 coolSpot = uStarColor * 0.35;
-            vec3 col = mix(hotCore, coolSpot, spots * 0.65);
-            col *= (0.48 + 0.65 * limb);
-            // Bright white-hot plasma center
-            col += vec3(0.45) * gran * limb * uIntensity;
+            vec3 hotCore = uStarColor * (1.30 + gran * 0.85) * uIntensity;
+            vec3 coolSpot = uStarColor * 0.28;
+            vec3 col = mix(hotCore, coolSpot, spots * 0.70);
+            col *= (0.45 + 0.70 * limb);
+            col += vec3(0.55) * pow(gran, 1.6) * limb * uIntensity;
+            col += mix(uStarColor, vec3(1.0, 0.55, 0.22), 0.45) * chromosphere * uIntensity;
             fragColor = vec4(col, 1.0);
         }
     """
@@ -569,7 +752,7 @@ object ShaderLibrary {
         }
     """
 
-    // 5. BLACK HOLE EVENT HORIZON + PHOTON RING + DOPPLER ACCRETION DISK
+    // 5. BLACK HOLE EVENT HORIZON + MULTI-RING PHOTON SPHERE + RELATIVISTIC DOPPLER ACCRETION DISK + LENSED HALO
     const val BLACK_HOLE_CORE_VS = """#version 300 es
         precision highp float;
         layout(location = 0) in vec3 aPos;
@@ -597,10 +780,12 @@ object ShaderLibrary {
         void main() {
             vec3 N = normalize(vWorldNormal);
             vec3 V = normalize(uCamPos - vWorldPos);
-            float edge = 1.0 - max(dot(N, V), 0.0);
-            // Razor-sharp glowing photon sphere around pitch-black event horizon
-            float photonRing = pow(edge, 9.0) * (1.8 + uAccretionActivity * 1.2);
-            vec3 ringColor = vec3(1.0, 0.76, 0.38) * photonRing;
+            float ndv = max(dot(N, V), 0.0);
+            float edge = 1.0 - ndv;
+            // Pitch-black Schwarzschild shadow in center, razor-sharp golden-white photon sphere at limb
+            float photonPrimary = pow(edge, 14.0) * (2.6 + uAccretionActivity * 1.8);
+            float photonHalo = pow(edge, 5.5) * (0.45 + uAccretionActivity * 0.55);
+            vec3 ringColor = vec3(1.0, 0.84, 0.52) * photonPrimary + vec3(1.0, 0.45, 0.16) * photonHalo;
             fragColor = vec4(ringColor, 1.0);
         }
     """
@@ -637,28 +822,61 @@ object ShaderLibrary {
         uniform vec3 uBhPos;
         uniform float uTime;
         uniform float uAccretionActivity;
+        uniform int uIsLensedHalo; // 0 = primary equatorial disk, 1 = gravitationally lensed Einstein halo
         out vec4 fragColor;
         $NOISE_GLSL
 
         void main() {
             float angle = atan(vLocalPos.z, vLocalPos.x);
-            // Keplerian differential swirl
-            float swirl = angle + (1.0 / (0.18 + vRadNorm)) * 2.2 - uTime * (2.6 - vRadNorm * 1.4);
-            float spiral = fbm(vec3(cos(swirl) * 3.0, vRadNorm * 9.0, sin(swirl) * 3.0), 3);
-            float bands = 0.55 + 0.45 * sin(vRadNorm * 28.0 - uTime * 4.0 + spiral * 5.0);
+            // Fast Keplerian differential plasma spiral
+            float swirl = angle + (1.0 / (0.14 + vRadNorm)) * 2.6 - uTime * (3.2 - vRadNorm * 1.7);
+            float spiral = fbm(vec3(cos(swirl) * 3.5, vRadNorm * 10.5, sin(swirl) * 3.5), 3);
+            float fineStreams = 0.52 + 0.48 * sin(vRadNorm * 38.0 - uTime * 5.2 + spiral * 6.5);
+            float clumps = smoothstep(0.32, 0.78, spiral);
 
-            // Relativistic Doppler beaming: approaching tangent side brighter & bluer, receding dimmer & redder
-            vec3 tangentDir = normalize(cross(vec3(0.0, 1.0, 0.0), normalize(vWorldPos - uBhPos)));
+            // Relativistic Doppler beaming: approaching plasma boosted white-blue, receding dimmed deep orange-red
+            vec3 relPos = normalize(vWorldPos - uBhPos + vec3(1e-5));
+            vec3 tangentDir = normalize(cross(vec3(0.0, 1.0, 0.0), relPos));
             vec3 toCam = normalize(uCamPos - vWorldPos);
             float doppler = dot(tangentDir, toCam);
-            float beaming = pow(1.0 + 0.42 * doppler, 2.4);
+            float beaming = pow(clamp(1.0 + 0.48 * doppler, 0.35, 1.65), 2.3);
 
-            float fade = smoothstep(0.0, 0.10, vRadNorm) * smoothstep(1.0, 0.25, vRadNorm);
-            vec3 hotInner = mix(vec3(1.0, 0.55, 0.18), vec3(0.78, 0.90, 1.0), clamp(doppler * 0.5 + (1.0 - vRadNorm) * 0.6, 0.0, 1.0));
-            vec3 coolOuter = vec3(0.65, 0.16, 0.08);
-            vec3 col = mix(hotInner, coolOuter, vRadNorm) * bands * (0.7 + 0.9 * spiral) * beaming * (1.2 + uAccretionActivity * 0.9);
-            float alpha = fade * (0.45 + 0.55 * spiral) * clamp(0.75 + uAccretionActivity * 0.25, 0.0, 1.0);
+            float iscoPeak = exp(-pow((vRadNorm - 0.11) / 0.09, 2.0)) * 0.9;
+            float fade = smoothstep(0.0, 0.08, vRadNorm) * (1.0 - smoothstep(0.20, 1.0, vRadNorm));
+            vec3 hotInner = mix(vec3(1.0, 0.62, 0.22), vec3(0.85, 0.94, 1.0), clamp(doppler * 0.45 + (1.0 - vRadNorm) * 0.55, 0.0, 1.0));
+            vec3 coolOuter = vec3(0.75, 0.18, 0.06);
+            float activityGain = 1.0 + uAccretionActivity * 1.15;
+            if (uIsLensedHalo == 1) {
+                // Bent gravitational lensing halo over/under the shadow
+                fade *= 0.68;
+                activityGain *= 0.85;
+            }
+            vec3 col = mix(hotInner, coolOuter, pow(vRadNorm, 0.8)) * (fineStreams * (0.55 + 0.95 * clumps) + iscoPeak) * beaming * activityGain;
+            float alpha = fade * (0.38 + 0.62 * clumps) * clamp(0.72 + uAccretionActivity * 0.30, 0.0, 1.0);
             fragColor = vec4(col * alpha, alpha);
+        }
+    """
+
+    // Relativistic Polar Jet billboard shader for active accreting Black Holes
+    const val BH_JET_FS = """#version 300 es
+        precision highp float;
+        in vec2 vUv; // [-1..1]
+        uniform float uTime;
+        uniform float uAccretionActivity;
+        out vec4 fragColor;
+
+        void main() {
+            float axial = abs(vUv.y);
+            float beamWidth = 0.045 + axial * 0.11;
+            float radial = abs(vUv.x) / beamWidth;
+            if (radial > 1.0 || axial < 0.06) discard;
+
+            float core = exp(-radial * radial * 3.8);
+            float pulse = 0.72 + 0.28 * sin(axial * 24.0 - uTime * 11.0);
+            float lengthFade = smoothstep(0.06, 0.22, axial) * pow(1.0 - axial, 1.45);
+            float strength = clamp(uAccretionActivity * 0.85, 0.0, 1.8) * core * pulse * lengthFade;
+            vec3 col = mix(vec3(0.32, 0.68, 1.0), vec3(0.82, 0.92, 1.0), core);
+            fragColor = vec4(col * strength, strength);
         }
     """
 
@@ -700,7 +918,7 @@ object ShaderLibrary {
         void main() {
             // Concentric ice/rock ringlet bands
             float ringlets = 0.65 + 0.35 * sin(vRadNorm * 95.0) * cos(vRadNorm * 37.0);
-            float edgeFade = smoothstep(0.0, 0.06, vRadNorm) * smoothstep(1.0, 0.92, vRadNorm);
+            float edgeFade = smoothstep(0.0, 0.06, vRadNorm) * (1.0 - smoothstep(0.92, 1.0, vRadNorm));
             float gap = 1.0;
             if (uHasCassiniGap == 1) {
                 gap *= smoothstep(0.018, 0.048, abs(vRadNorm - 0.62)); // Cassini division

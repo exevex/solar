@@ -12,6 +12,7 @@ import kotlin.math.hypot
 
 enum class InteractionMode {
     ORBIT_SELECT,
+    DRAG_BODY,
     SLINGSHOT_LAUNCH,
     SPAWN_TAP
 }
@@ -107,6 +108,16 @@ class SolarGLSurfaceView(
                         slingshotVel = Vec3d.ZERO
                         isSlingshotDragging = true
                         onSlingshotAim(worldPt, Vec3d.ZERO)
+                    }
+                } else if (interactionMode == InteractionMode.DRAG_BODY) {
+                    val picked = renderer.pickBodyAt(event.x, event.y)
+                    if (picked != null) {
+                        grabbedBodyId = picked
+                        lastGrabWorldPos = renderer.screenToEclipticWorldPos(event.x, event.y)
+                        lastGrabTimeMs = System.currentTimeMillis()
+                        grabVelocity = Vec3d.ZERO
+                        onTapBody(picked)
+                        performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
                     }
                 } else if (interactionMode == InteractionMode.ORBIT_SELECT) {
                     mainHandler.postDelayed(longPressRunnable, 420L)

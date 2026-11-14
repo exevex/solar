@@ -107,6 +107,12 @@ fun SolarSandboxScreen(viewModel: SandboxViewModel) {
                         modifier = Modifier.align(Alignment.TopCenter)
                     )
 
+                    // Live Cosmic Activity & Selected Body Status Ticker
+                    CosmicStatusTicker(
+                        uiState = uiState,
+                        modifier = Modifier.align(Alignment.TopStart)
+                    )
+
                     // Left Tool Rail
                     ToolRail(
                         activeTab = uiState.activeToolTab,
@@ -121,16 +127,6 @@ fun SolarSandboxScreen(viewModel: SandboxViewModel) {
                             .padding(top = 60.dp, bottom = 76.dp, end = 12.dp)
                     ) {
                         when (uiState.activeToolTab) {
-                            SandboxToolTab.SPAWN -> SpawnDrawer(
-                                uiState = uiState,
-                                onSelectCategory = { viewModel.selectSpawnCategory(it) },
-                                onSelectTemplate = { viewModel.selectSpawnTemplate(it) },
-                                onSpawnQuickOrbit = {
-                                    val r = 1.6 + (uiState.bodyCount % 5) * 0.45
-                                    viewModel.spawnAtWorldPos(Vec3d(r, 0.0, 0.0))
-                                },
-                                onClose = { viewModel.setToolTab(SandboxToolTab.NONE) }
-                            )
                             SandboxToolTab.SLINGSHOT -> SlingshotHintCard(
                                 template = uiState.selectedSpawnTemplate,
                                 onSwitchToSpawnCatalog = { viewModel.setToolTab(SandboxToolTab.SPAWN) },
@@ -157,19 +153,34 @@ fun SolarSandboxScreen(viewModel: SandboxViewModel) {
                                 onNudgeOrbit = { viewModel.nudgeSelectedOrbitSpeed(it) },
                                 onClose = { viewModel.setToolTab(SandboxToolTab.NONE) }
                             )
-                            SandboxToolTab.NONE -> Unit
+                            SandboxToolTab.SPAWN, SandboxToolTab.DRAG, SandboxToolTab.NONE -> Unit
                         }
                     }
 
-                    // Bottom Time Control Dock
-                    TimeControlDock(
-                        config = uiState.config,
-                        onTogglePause = { viewModel.togglePause() },
-                        onToggleRewind = { viewModel.toggleRewind() },
-                        onResetPreset = { viewModel.resetCurrentPreset() },
-                        onTimeScaleChange = { viewModel.setTimeScale(it) },
-                        modifier = Modifier.align(Alignment.BottomCenter)
-                    )
+                    // Bottom Dock: Wide Horizontal Spawn Tray OR Time Control Dock
+                    if (uiState.activeToolTab == SandboxToolTab.SPAWN) {
+                        SpawnDrawer(
+                            uiState = uiState,
+                            onSelectCategory = { viewModel.selectSpawnCategory(it) },
+                            onSelectTemplate = { viewModel.selectSpawnTemplate(it) },
+                            onSpawnQuickOrbit = {
+                                val r = 1.6 + (uiState.bodyCount % 5) * 0.45
+                                viewModel.spawnAtWorldPos(Vec3d(r, 0.0, 0.0))
+                            },
+                            onTogglePause = { viewModel.togglePause() },
+                            onClose = { viewModel.setToolTab(SandboxToolTab.NONE) },
+                            modifier = Modifier.align(Alignment.BottomCenter)
+                        )
+                    } else {
+                        TimeControlDock(
+                            config = uiState.config,
+                            onTogglePause = { viewModel.togglePause() },
+                            onToggleRewind = { viewModel.toggleRewind() },
+                            onResetPreset = { viewModel.resetCurrentPreset() },
+                            onTimeScaleChange = { viewModel.setTimeScale(it) },
+                            modifier = Modifier.align(Alignment.BottomCenter)
+                        )
+                    }
                 }
             }
         }

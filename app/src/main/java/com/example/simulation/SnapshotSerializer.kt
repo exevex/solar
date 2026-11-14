@@ -44,6 +44,7 @@ object SnapshotSerializer {
                 put("id", b.id)
                 put("name", b.name)
                 put("type", b.type.name)
+                put("archetype", b.archetype.name)
                 put("spectralClass", b.spectralClass.name)
                 put("px", b.pos.x); put("py", b.pos.y); put("pz", b.pos.z)
                 put("vx", b.vel.x); put("vy", b.vel.y); put("vz", b.vel.z)
@@ -69,6 +70,7 @@ object SnapshotSerializer {
                 put("initialMassSolar", b.initialMassSolar)
                 put("evolutionStage", b.evolutionStage.name)
                 put("accretionActivity", b.accretionActivity.toDouble())
+                put("absorbedMassSolar", b.absorbedMassSolar)
                 put("isBackgroundCluster", b.isBackgroundCluster)
                 if (b.parentBodyId != null) put("parentBodyId", b.parentBodyId)
 
@@ -149,11 +151,21 @@ object SnapshotSerializer {
                 }
             } else emptyList()
 
+            val bodyType = BodyType.valueOf(bj.getString("type"))
+            val defaultArchetype = when (bodyType) {
+                BodyType.EARTH_LIKE -> BodyArchetype.GENERIC_EARTH
+                BodyType.GAS_GIANT -> BodyArchetype.GENERIC_GAS
+                BodyType.ICE_GIANT -> BodyArchetype.GENERIC_ICE
+                BodyType.COMET -> BodyArchetype.COMET
+                else -> BodyArchetype.GENERIC_ROCK
+            }
             bodies.add(
                 CelestialBody(
                     id = bj.getLong("id"),
                     name = bj.getString("name"),
-                    type = BodyType.valueOf(bj.getString("type")),
+                    type = bodyType,
+                    archetype = runCatching { BodyArchetype.valueOf(bj.optString("archetype")) }
+                        .getOrDefault(defaultArchetype),
                     spectralClass = runCatching { SpectralClass.valueOf(bj.optString("spectralClass")) }
                         .getOrDefault(SpectralClass.NONE),
                     pos = Vec3d(bj.getDouble("px"), bj.getDouble("py"), bj.getDouble("pz")),
@@ -188,6 +200,7 @@ object SnapshotSerializer {
                         .getOrDefault(EvolutionStage.NONE),
                     parentBodyId = if (bj.has("parentBodyId")) bj.getLong("parentBodyId") else null,
                     accretionActivity = bj.optDouble("accretionActivity", 0.0).toFloat(),
+                    absorbedMassSolar = bj.optDouble("absorbedMassSolar", 0.0),
                     isBackgroundCluster = bj.optBoolean("isBackgroundCluster", false)
                 )
             )

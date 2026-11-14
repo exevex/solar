@@ -18,7 +18,8 @@ data class ScreenBodyLabel(
     val type: BodyType,
     val xPx: Float,
     val yPx: Float,
-    val isSelected: Boolean
+    val isSelected: Boolean,
+    val statusTag: String? = null
 )
 
 data class SlingshotPreview(
@@ -71,6 +72,7 @@ class SolarGLRenderer(
     private lateinit var coronaProg: GlShaderProgram
     private lateinit var bhCoreProg: GlShaderProgram
     private lateinit var accretionProg: GlShaderProgram
+    private lateinit var bhJetProg: GlShaderProgram
     private lateinit var ringProg: GlShaderProgram
     private lateinit var instancedRockProg: GlShaderProgram
     private lateinit var lineProg: GlShaderProgram
@@ -131,6 +133,7 @@ class SolarGLRenderer(
         coronaProg = GlShaderProgram.compile(ShaderLibrary.CORONA_VS, ShaderLibrary.CORONA_FS, "Corona")
         bhCoreProg = GlShaderProgram.compile(ShaderLibrary.BLACK_HOLE_CORE_VS, ShaderLibrary.BLACK_HOLE_CORE_FS, "BHCore")
         accretionProg = GlShaderProgram.compile(ShaderLibrary.ACCRETION_DISK_VS, ShaderLibrary.ACCRETION_DISK_FS, "Accretion")
+        bhJetProg = GlShaderProgram.compile(ShaderLibrary.CORONA_VS, ShaderLibrary.BH_JET_FS, "BHJet")
         ringProg = GlShaderProgram.compile(ShaderLibrary.RING_VS, ShaderLibrary.RING_FS, "Ring")
         instancedRockProg = GlShaderProgram.compile(ShaderLibrary.INSTANCED_ROCK_VS, ShaderLibrary.INSTANCED_ROCK_FS, "InstRock")
         lineProg = GlShaderProgram.compile(ShaderLibrary.LINE_VS, ShaderLibrary.LINE_FS, "Line")
@@ -139,11 +142,11 @@ class SolarGLRenderer(
         blurProg = GlShaderProgram.compile(ShaderLibrary.QUAD_VS, ShaderLibrary.BLUR_FS, "Blur")
         compositeProg = GlShaderProgram.compile(ShaderLibrary.QUAD_VS, ShaderLibrary.COMPOSITE_FS, "Composite")
 
-        sphereLod0 = MeshFactory.createSphere(38, 54)
-        sphereLod1 = MeshFactory.createSphere(22, 32)
+        sphereLod0 = MeshFactory.createSphere(46, 68)
+        sphereLod1 = MeshFactory.createSphere(24, 34)
         sphereLod2 = MeshFactory.createSphere(12, 16)
         asteroidMesh = MeshFactory.createAsteroidRock()
-        annulusMesh = MeshFactory.createAnnulus(84)
+        annulusMesh = MeshFactory.createAnnulus(96)
         quadMesh = MeshFactory.createQuad()
         skyboxCube = createSkyboxCube()
 
@@ -342,6 +345,13 @@ class SolarGLRenderer(
             // Screen-space projection for Compose labels & gravitational lensing
             val screenPt = projectToScreen(rx, ry, rz)
             if (screenPt != null) {
+                val tag = when {
+                    b.tidalStretchAmount > 0.16f || b.tidalStress > 0.12f -> "SPAGHETTIFYING"
+                    b.type == BodyType.BLACK_HOLE && b.accretionActivity > 0.55f -> "ACCRETING"
+                    b.type == BodyType.RED_GIANT -> "RED GIANT"
+                    b.crustHeat > 0.35f -> "MOLTEN"
+                    else -> null
+                }
                 screenLabels.add(
                     ScreenBodyLabel(
                         id = b.id,
@@ -349,7 +359,8 @@ class SolarGLRenderer(
                         type = b.type,
                         xPx = screenPt.first,
                         yPx = screenPt.second,
-                        isSelected = b.id == selectedBodyId
+                        isSelected = b.id == selectedBodyId,
+                        statusTag = tag
                     )
                 )
             }
@@ -386,6 +397,10 @@ class SolarGLRenderer(
                     starProg.setMat4("uModel", modelMatrix)
                     starProg.setMat4("uViewProj", viewProjMatrix)
                     starProg.setFloat("uLogDepthCoef", logDepthCoef)
+                    starProg.setVec3("uBodyPos", rx, ry, rz)
+                    starProg.setFloat("uBodyRadius", rad)
+                    starProg.setVec3("uTidalDir", b.tidalStretchDir.x.toFloat(), b.tidalStretchDir.y.toFloat(), b.tidalStretchDir.z.toFloat())
+                    starProg.setFloat("uTidalStretch", b.tidalStretchAmount)
                     starProg.setVec3("uCamPos", eyeX, eyeY, eyeZ)
                     starProg.setVec3("uStarColor", b.albedoColor.first, b.albedoColor.second, b.albedoColor.third)
                     starProg.setFloat("uTime", animTimeSec)
@@ -410,6 +425,8 @@ class SolarGLRenderer(
                     planetProg.setVec3("uCamPos", eyeX, eyeY, eyeZ)
                     planetProg.setVec3("uBodyPos", rx, ry, rz)
                     planetProg.setFloat("uBodyRadius", rad)
+                    planetProg.setVec3("uTidalDir", b.tidalStretchDir.x.toFloat(), b.tidalStretchDir.y.toFloat(), b.tidalStretchDir.z.toFloat())
+                    planetProg.setFloat("uTidalStretch", b.tidalStretchAmount)
 
                     val style = when (b.type) {
                         BodyType.EARTH_LIKE -> 0
@@ -419,6 +436,7 @@ class SolarGLRenderer(
                         else -> 1
                     }
                     planetProg.setInt("uPlanetStyle", style)
+                    planetProg.setInt("uBodyArchetype", b.archetype.shaderId)
                     planetProg.setFloat("uSeed", b.seed)
                     planetProg.setFloat("uTime", animTimeSec)
                     planetProg.setInt("uFbmOctaves", quality.fbmOctaves)
@@ -428,6 +446,7 @@ class SolarGLRenderer(
                     planetProg.setInt("uHasClouds", if (b.hasClouds) 1 else 0)
                     planetProg.setInt("uHasCityLights", if (b.hasCityLights) 1 else 0)
                     planetProg.setFloat("uCrustHeat", b.crustHeat)
+                    planetProg.setFloat("uTidalStress", b.tidalStress)
                     planetProg.setInt("uEnableAtmo", if (quality.atmosphereScattering) 1 else 0)
                     planetProg.setInt("uEnableEclipses", if (quality.eclipseShadows) 1 else 0)
 
@@ -517,11 +536,13 @@ class SolarGLRenderer(
             annulusMesh.draw()
         }
 
-        // Additive Black Hole Relativistic Accretion Disks & Star Coronas
+        // Additive Black Hole Relativistic Accretion Disks, Lensed Einstein Halo & Relativistic Polar Jets
         GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE)
         for (bh in blackHoles) {
             val rel = bh.pos - cameraOrigin
             val rad = bh.getVisualRadiusAu(trueScale).toFloat()
+
+            // 1) Primary equatorial relativistic Doppler-beamed accretion disk
             Matrix.setIdentityM(modelMatrix, 0)
             Matrix.translateM(modelMatrix, 0, rel.x.toFloat(), rel.y.toFloat(), rel.z.toFloat())
             Matrix.rotateM(modelMatrix, 0, 14f, 0.25f, 0f, 1f)
@@ -529,13 +550,46 @@ class SolarGLRenderer(
             accretionProg.setMat4("uModel", modelMatrix)
             accretionProg.setMat4("uViewProj", viewProjMatrix)
             accretionProg.setFloat("uLogDepthCoef", logDepthCoef)
-            accretionProg.setFloat("uInnerRad", rad * 1.45f)
-            accretionProg.setFloat("uOuterRad", rad * 5.8f)
+            accretionProg.setFloat("uInnerRad", rad * 1.28f)
+            accretionProg.setFloat("uOuterRad", rad * (5.6f + bh.accretionActivity.coerceAtMost(1.5f) * 1.2f))
             accretionProg.setVec3("uCamPos", eyeX, eyeY, eyeZ)
             accretionProg.setVec3("uBhPos", rel.x.toFloat(), rel.y.toFloat(), rel.z.toFloat())
             accretionProg.setFloat("uTime", animTimeSec)
             accretionProg.setFloat("uAccretionActivity", bh.accretionActivity)
+            accretionProg.setInt("uIsLensedHalo", 0)
             annulusMesh.draw()
+
+            // 2) Gravitationally lensed secondary halo arch wrapping over/under the black hole shadow (Gargantua-style)
+            val vx = eyeX - rel.x.toFloat()
+            val vz = eyeZ - rel.z.toFloat()
+            val camYawDeg = Math.toDegrees(atan2(vx.toDouble(), vz.toDouble())).toFloat()
+            Matrix.setIdentityM(modelMatrix, 0)
+            Matrix.translateM(modelMatrix, 0, rel.x.toFloat(), rel.y.toFloat(), rel.z.toFloat())
+            Matrix.rotateM(modelMatrix, 0, camYawDeg, 0f, 1f, 0f)
+            Matrix.rotateM(modelMatrix, 0, 82f, 1f, 0f, 0f)
+            accretionProg.setMat4("uModel", modelMatrix)
+            accretionProg.setFloat("uInnerRad", rad * 1.04f)
+            accretionProg.setFloat("uOuterRad", rad * 2.15f)
+            accretionProg.setInt("uIsLensedHalo", 1)
+            annulusMesh.draw()
+
+            // 3) Relativistic Bipolar Jets when black hole is actively accreting matter
+            if (bh.accretionActivity > 0.35f) {
+                val jetLen = rad * (5.5f + bh.accretionActivity * 4.5f)
+                Matrix.setIdentityM(modelMatrix, 0)
+                Matrix.translateM(modelMatrix, 0, rel.x.toFloat(), rel.y.toFloat(), rel.z.toFloat())
+                // Vertical billboard facing camera around Y spin axis
+                modelMatrix[0] = cos(Math.toRadians(camYawDeg.toDouble())).toFloat() * jetLen
+                modelMatrix[2] = -sin(Math.toRadians(camYawDeg.toDouble())).toFloat() * jetLen
+                modelMatrix[5] = jetLen
+                bhJetProg.use()
+                bhJetProg.setMat4("uModel", modelMatrix)
+                bhJetProg.setMat4("uViewProj", viewProjMatrix)
+                bhJetProg.setFloat("uLogDepthCoef", logDepthCoef)
+                bhJetProg.setFloat("uTime", animTimeSec)
+                bhJetProg.setFloat("uAccretionActivity", bh.accretionActivity)
+                quadMesh.draw()
+            }
         }
 
         for (st in coronasToDraw) {
@@ -700,6 +754,29 @@ class SolarGLRenderer(
             GLES30.glBufferSubData(GLES30.GL_ARRAY_BUFFER, 0, 2 * 7 * 4, lineBuf)
             GLES30.glLineWidth(4.0f)
             GLES30.glDrawArrays(GLES30.GL_LINES, 0, 2)
+        }
+
+        // Curved Tidal Spaghettification Plasma Filaments pulling from stars/planets into Black Holes
+        for (fil in frame.tidalFilaments) {
+            val pts = fil.points
+            if (pts.size < 2) continue
+            val count = pts.size.coerceAtMost(maxLineVerts)
+            lineBuf.clear()
+            for (i in 0 until count) {
+                val rel = pts[i] - cameraOrigin
+                val t = i.toFloat() / (count - 1).coerceAtLeast(1)
+                val alpha = (1.0f - t * 0.45f) * fil.intensity.coerceIn(0.2f, 1.3f)
+                // Taper from victim color into blazing white-gold accretion stream
+                val cr = fil.color.first * (1.25f + t * 0.4f)
+                val cg = fil.color.second * (1.05f + t * 0.3f)
+                val cb = fil.color.third + t * 0.35f
+                lineBuf.put(rel.x.toFloat()); lineBuf.put(rel.y.toFloat()); lineBuf.put(rel.z.toFloat())
+                lineBuf.put(cr); lineBuf.put(cg); lineBuf.put(cb); lineBuf.put(alpha.coerceIn(0f, 1f))
+            }
+            lineBuf.position(0)
+            GLES30.glBufferSubData(GLES30.GL_ARRAY_BUFFER, 0, count * 7 * 4, lineBuf)
+            GLES30.glLineWidth(6.5f)
+            GLES30.glDrawArrays(GLES30.GL_LINE_STRIP, 0, count)
         }
 
         // Expanding Shockwaves & Gravitational Wave Ripples

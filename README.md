@@ -20,33 +20,30 @@
 
 ### Visuals & OpenGL ES 3.0 Shaders
 - **Floating Origin + Logarithmic Depth:** World coordinates are subtracted in 64-bit `Double` precision relative to the camera focus target before uploading `Float` matrices, paired with logarithmic depth encoding to eliminate jitter and z-fighting from planetary surfaces out to 100+ AU.
-- **Procedural 3D Spherical PBR Planets:** Zero-seam 3D FBM terrain, normal relief perturbation, ocean specular glint, polar ice caps, Earth night-side city lights, animated swirling cloud layers, Jupiter/Saturn zonal jet bands & Great Red Spot, and Mars/Mercury craters.
+- **NASA/JPL Body-Accurate Procedural PBR Planets:** Distinct high-resolution procedural GLSL shaders tailored to each world—Earth (continents, ocean specular glint, animated cyclone clouds, night-side city lights), Mars (rust basins, *Valles Marineris* canyon scar, craters, polar caps), Mercury & Moon (dense rayed craters & maria), Venus (thick super-rotating sulfur clouds), Jupiter (turbulent zonal belts & Great Red Spot), Saturn (golden bands & North Polar Hexagon), Uranus & Neptune (methane cyan/cobalt bands, cirrus & Great Dark Spot), Pluto (*Sputnik Planitia* nitrogen heart), Io (volcanic sulfur calderas), Europa (criss-crossing ice lineae), Titan (orange organic haze), and Enceladus (icy tiger stripes)—all dynamically reacting to thermal crust heating and tidal stretching without extra VRAM overhead.
 - **Atmosphere, Shadows & Eclipses:** Rayleigh/Mie rim scattering with orange-red sunset terminators, analytical ray-sphere eclipse shadows across planets/moons, and mutual Saturn ring/planet shadows.
-- **HDR Stars & Post-Processing:** Planckian blackbody star colors (O, B, A, F, G, K, M), animated solar granulation & sunspots, limb darkening, additive plasma corona & pulsar beams, multi-pass separable Gaussian **Bloom**, and ACES Filmic tone mapping.
-- **Skybox & Trails:** Procedural Milky Way galactic band + multi-spectral starfield, toggleable orbit trails, floating body labels, and **Cinematic Camera Mode**.
+- **HDR Stars & Post-Processing:** Planckian blackbody star colors (O, B, A, F, G, K, M), dual-scale animated solar granulation & chromosphere limb glow, limb darkening, additive plasma corona & pulsar beams, multi-pass separable Gaussian **Bloom**, and ACES Filmic tone mapping.
+- **Skybox & Trails:** Procedural Milky Way galactic band + multi-spectral starfield, toggleable orbit trails, floating body labels with live status tags (`SPAGHETTIFYING`, `ACCRETING`, `MOLTEN`, `RED GIANT`), live Cosmic Activity Ticker, and **Cinematic Camera Mode**.
 
 ### Black Holes & Relativistic Effects
-- **Black Holes of Any Mass:** Spawn Stellar (12 $M_\odot$), Intermediate (80 $M_\odot$), or Supermassive (300+ $M_\odot$) black holes, or edit mass live.
-- **Gravitational Lensing Shader:** Screen-space Einstein-ring deflection warping background stars and planets around every visible black hole.
-- **Event Horizon, Photon Ring & Doppler Accretion Disk:** Pitch-black horizon core, HDR photon sphere, and swirling Keplerian accretion disk with **relativistic Doppler beaming** (blue-bright approaching limb, dim redshifted receding limb).
-- **Tidal Disruption Events (TDE):** Bodies entering the tidal limit are shredded into spiraling plasma streams, trigger relativistic polar jets, and grow the black hole's mass and Schwarzschild radius.
+- **Black Holes of Any Mass:** Easily spawn Primordial (3 $M_\odot$), Stellar (12 $M_\odot$), Intermediate (80 $M_\odot$), or Supermassive (350 $M_\odot$) black holes from the top `Black Holes` spawn category, or scale mass to infinity in the Inspector.
+- **Gargantua-Style Black Hole Model:** Deep-black event horizon, razor-sharp inner photon ring, equatorial swirling Keplerian accretion disk with **relativistic Doppler beaming**, vertically bent **gravitationally lensed upper/lower Einstein disk halo**, screen-space lensing distortion, and **relativistic bipolar polar jets** that intensify during feeding.
+- **Visible Spaghettification & Tidal Disruption (TDE):** Bodies entering the Roche/tidal zone visibly elongate into a teardrop toward the black hole via GPU vertex deformation, heat up with tidal magma glow, shed **orbiting spiral plasma filaments** (`TidalStreamFilament`) and dense hot gas particles spiraling directly into the accretion disk, and transfer mass to grow the black hole's event horizon (`Absorbed Mass` tracked live).
 - **Hawking Evaporation & Mergers:** Optional Hawking radiation mass loss culminating in an evaporation flash, plus binary black hole inspirals and gravitational-wave merger ripples.
 
 ### Sandbox Tools, Weapons & Presets
-- **Live Object Inspector & Editor:** Live telemetry (surface gravity $g$, escape velocity km/s, temperature K/°C, density g/cm³, orbital period, semi-major axis, eccentricity, Schwarzschild radius) plus live sliders for Radius, Mass, Density, Luminosity, Temperature, Spin, Axial Tilt, Atmosphere, Orbit Speed ±15%, and Surface Tint.
-- **Spawn Catalog:** Planets, Moons, Stars (O/B/A/F/G/K/M + Red Giant), White Dwarfs, Neutron Stars (Pulsars), Comets, Asteroids, and Black Holes.
+- **Live Object Inspector & Infinite Sliders:** Live telemetry (status summary, surface gravity $g$, escape velocity km/s, temperature K/°C, density g/cm³, orbital period, semi-major axis, eccentricity, Schwarzschild radius, absorbed mass) plus **infinite self-recentering sliders** and `÷2`/`×2` quick buttons for Radius, Mass, Density, Luminosity, Temperature, Spin Rate, and Atmosphere—drag to max, release to re-center at the new anchor value, and keep scaling upward indefinitely.
+- **Wide Multi-Item Spawn Tray:** Full-width horizontal bottom catalog showing 4–5 objects at once (`Black Holes`, `Planets`, `Stars`, `Exotics`, `Small Bodies`) with `Orbit Spawn`, Play/Pause, and tap-in-space placement.
 - **Weapons & Cosmic Events:** Asteroid Strike, Thermonuclear Strike, Planet Splitter, Trigger Supernova, Gamma-Ray Burst, and Rogue Star Flyby.
 - **7 System Presets:** Solar System, Alpha Centauri, Binary Star System, TRAPPIST-1, Galaxy Collision, Sun → Red Giant Evolution, and Binary Black Holes.
 - **Stellar Evolution:** Main Sequence → Red Giant expansion → Supernova (Neutron Star / Black Hole) or Planetary Nebula → White Dwarf.
 
 ### Mobile UX & Optimization
 - **Touch Controls:**
-  - **1-finger drag:** Orbit camera around selected focus body
-  - **2-finger pinch:** Logarithmic zoom from planetary crust out to 180 AU
-  - **Tap:** 3D ray-sphere body selection (or tap-to-place in Spawn mode)
-  - **Long-press + drag:** Grab and fling existing bodies
+  - **Orbit tool (default):** 1-finger drag orbits camera, 2-finger pinch zooms logarithmically, tap selects, long-press + drag grabs/flings any body
+  - **Drag tool:** Dedicated left-rail **Drag** mode so 1-finger touch immediately grabs and flings planets, stars, or black holes without waiting for a long-press
   - **Slingshot mode:** Touch and drag back to aim launch velocity with a real-time **predicted trajectory arc**
-- **Performance:** Dedicated background physics thread, 3-tier sphere mesh LODs, GPU-instanced (`glDrawElementsInstanced`) asteroid belt & star clusters, Quality Settings (`Low`, `Medium`, `High`, `Ultra`), **Auto-Detect Device**, and **Battery Saver (30 FPS)** mode.
+- **Performance:** Dedicated background physics thread, upgraded high-detail sphere mesh LODs (`46×68` / `24×34`), GPU-instanced (`glDrawElementsInstanced`) asteroid belt & star clusters, Quality Settings (`Low`, `Medium`, `High`, `Ultra`), **Auto-Detect Device**, and **Battery Saver (30 FPS)** mode.
 
 ---
 

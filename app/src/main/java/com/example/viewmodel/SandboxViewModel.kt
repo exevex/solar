@@ -18,6 +18,7 @@ import kotlin.random.Random
 
 enum class SandboxToolTab {
     NONE,
+    DRAG,
     SPAWN,
     SLINGSHOT,
     WEAPONS,
@@ -25,10 +26,10 @@ enum class SandboxToolTab {
 }
 
 enum class SpawnCategory(val label: String) {
+    BLACK_HOLES("Black Holes"),
     PLANETS("Planets & Moons"),
     STARS("Stars & Remnants"),
-    SMALL("Comets & Asteroids"),
-    BLACK_HOLES("Black Holes")
+    SMALL("Comets & Asteroids")
 }
 
 data class SpawnTemplate(
@@ -52,7 +53,7 @@ data class SandboxUiState(
     val currentPreset: SystemPreset = SystemPreset.SOLAR_SYSTEM,
     val activeToolTab: SandboxToolTab = SandboxToolTab.NONE,
     val selectedSpawnTemplate: SpawnTemplate = SpawnCatalog.all.first(),
-    val selectedSpawnCategory: SpawnCategory = SpawnCategory.PLANETS,
+    val selectedSpawnCategory: SpawnCategory = SpawnCategory.BLACK_HOLES,
     val selectedBodyId: Long? = 1L,
     val selectedTelemetry: BodyTelemetry? = null,
     val elapsedYears: Double = 0.0,
@@ -63,6 +64,7 @@ data class SandboxUiState(
     val simTps: Float = 60f,
     val cinematicMode: Boolean = false,
     val eventBanner: String? = null,
+    val activityFeed: List<String> = emptyList(),
     val screenLabels: List<ScreenBodyLabel> = emptyList(),
     val savedSlots: List<SavedSlotInfo> = emptyList(),
     val showPresetsDialog: Boolean = false,
@@ -176,18 +178,22 @@ object SpawnCatalog {
             albedoColor = Triple(0.55f, 0.50f, 0.46f)
         ),
 
-        // Black Holes
+        // Black Holes (featured prominently!)
+        SpawnTemplate(
+            "bh_micro", "Primordial BH (3 M☉)", SpawnCategory.BLACK_HOLES, BodyType.BLACK_HOLE,
+            massSolar = 3.0, radiusKm = 2.95325 * 3.0, temperatureK = 0.0
+        ),
         SpawnTemplate(
             "bh_stellar", "Stellar Black Hole (12 M☉)", SpawnCategory.BLACK_HOLES, BodyType.BLACK_HOLE,
-            massSolar = 12.0, radiusKm = 2.95 * 12.0, temperatureK = 0.0
+            massSolar = 12.0, radiusKm = 2.95325 * 12.0, temperatureK = 0.0
         ),
         SpawnTemplate(
             "bh_intermediate", "Intermediate BH (80 M☉)", SpawnCategory.BLACK_HOLES, BodyType.BLACK_HOLE,
-            massSolar = 80.0, radiusKm = 2.95 * 80.0, temperatureK = 0.0
+            massSolar = 80.0, radiusKm = 2.95325 * 80.0, temperatureK = 0.0
         ),
         SpawnTemplate(
-            "bh_smbh", "Supermassive BH (300 M☉)", SpawnCategory.BLACK_HOLES, BodyType.BLACK_HOLE,
-            massSolar = 300.0, radiusKm = 2.95 * 300.0, temperatureK = 0.0
+            "bh_smbh", "Supermassive BH (350 M☉)", SpawnCategory.BLACK_HOLES, BodyType.BLACK_HOLE,
+            massSolar = 350.0, radiusKm = 2.95325 * 350.0, temperatureK = 0.0
         )
     )
 }
@@ -257,6 +263,7 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
                             config = packet.config,
                             simTps = packet.simTps,
                             eventBanner = packet.lastEventMessage,
+                            activityFeed = packet.activityFeed,
                             allBodiesList = packet.bodies.filter { !it.isBackgroundCluster }
                         )
                     }
@@ -273,7 +280,7 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
 
     fun selectBody(id: Long?) {
         glRenderer?.selectedBodyId = id
-        if (id != null) {
+        if (id != null && _uiState.value.activeToolTab != SandboxToolTab.DRAG) {
             glRenderer?.focusedBodyId = id
             glRenderer?.manualPanOffset = Vec3d.ZERO
         }
@@ -389,6 +396,7 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
 
     fun getDesiredInteractionMode(): InteractionMode {
         return when (_uiState.value.activeToolTab) {
+            SandboxToolTab.DRAG -> InteractionMode.DRAG_BODY
             SandboxToolTab.SPAWN -> InteractionMode.SPAWN_TAP
             SandboxToolTab.SLINGSHOT -> InteractionMode.SLINGSHOT_LAUNCH
             else -> InteractionMode.ORBIT_SELECT
@@ -462,7 +470,14 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
 
     fun editSelectedBody(transform: (CelestialBody) -> CelestialBody) {
         val id = _uiState.value.selectedBodyId ?: return
-        engine.updateBody(id, transform)
+        engine.updateBody(id) { original ->
+            val updated = transform(original)
+            if (updated.type == BodyType.BLACK_HOLE && updated.massSolar != original.massSolar) {
+                updated.copy(radiusKm = 2.95325 * updated.massSolar)
+            } else {
+                updated
+            }
+        }
         engine.getBodyById(id)?.let { updated ->
             _uiState.update { it.copy(selectedTelemetry = engine.computeTelemetry(updated)) }
         }
@@ -470,9 +485,9 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
 
     fun editBodyDensity(newDensityGCm3: Double) {
         editSelectedBody { b ->
-            val currentD = b.densityGCm3().coerceAtLeast(0.01)
-            val ratio = (newDensityGCm3 / currentD).coerceIn(0.05, 50.0)
-            b.copy(massSolar = (b.massSolar * ratio).coerceAtLeast(1e-16))
+            val currentD = b.densityGCm3().coerceAtLeast(1e-4)
+            val ratio = (newDensityGCm3 / currentD).coerceIn(1e-4, 1e4)
+            b.copy(massSolar = (b.massSolar * ratio).coerceAtLeast(1e-18))
         }
     }
 
