@@ -8,13 +8,12 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
   build-apk:
     name: Test & Build Solar Sandbox APK
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
@@ -27,19 +26,20 @@ jobs:
           java-version: '21'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
-      - name: Accept Android SDK licenses and install SDK 36.1
+      - name: Accept Android SDK licenses and install SDK 36
         run: |
           SDK_MANAGER="${ANDROID_HOME:-$ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
           if [ ! -x "$SDK_MANAGER" ]; then
             SDK_MANAGER="$(find "${ANDROID_HOME:-$ANDROID_SDK_ROOT}" -name sdkmanager -type f | head -n 1)"
           fi
           yes | "$SDK_MANAGER" --licenses >/dev/null 2>&1 || true
-          "$SDK_MANAGER" "platform-tools" "build-tools;36.0.0" "platforms;android-36.1"
+          "$SDK_MANAGER" "platform-tools" "build-tools;36.0.0" "platforms;android-36"
+          "$SDK_MANAGER" "platforms;android-36.1" || true
 
       - name: Set up Gradle 9.3.1
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '9.3.1'
 
@@ -113,15 +113,6 @@ jobs:
           path: app/build/outputs/bundle/release/*.aab
           if-no-files-found: error
 
-      - name: Create GitHub Release on version tag
-        if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          files: |
-            app/build/outputs/apk/debug/*.apk
-            app/build/outputs/apk/release/*.apk
-
       - name: Write Build Summary
         if: always()
         run: |
@@ -134,3 +125,32 @@ jobs:
           else
             echo "- **Signed Release APK:** Skipped (add \`KEYSTORE_BASE64\`, \`STORE_PASSWORD\`, and \`KEY_PASSWORD\` in GitHub Repository Secrets to enable signed release builds)" >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  release:
+    name: Publish GitHub Release
+    needs: build-apk
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Debug APK
+        uses: actions/download-artifact@v4
+        with:
+          name: Solar-Sandbox-debug-apk
+          path: artifacts/debug
+
+      - name: Download Release APK (if built)
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: Solar-Sandbox-release-apk
+          path: artifacts/release
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/debug/*.apk
+            artifacts/release/*.apk
