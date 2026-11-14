@@ -2,12 +2,21 @@
 
 ## Option A: Automated APK Builds on GitHub Actions
 
-This repository includes `.github/workflows/android-apk.yml`, which automatically runs tests and builds APKs on every push to `main`/`master`, pull request, `v*` tag, or manual **Run workflow** trigger.
+This repository includes `.github/workflows/android-apk.yml`, which automatically builds APKs, runs unit/Robolectric tests and Android lint, and verifies APK signatures on every push to `main`/`master`, pull request, `v*` tag, or manual **Run workflow** trigger.
 
 ### 1. Immediate Debug APK Builds (Zero Setup)
 1. Push this repository to GitHub.
 2. Open the **Actions** tab → select **Build Android APK**.
-3. Download **`Solar-Sandbox-debug-apk`** from the workflow run's **Artifacts** section.
+3. Download **`Solar-Sandbox-debug-apk`** from a **successful** workflow run's **Artifacts** section. It contains `app-debug.apk`, its SHA-256 checksum, signing verification, and package metadata. Test XML/HTML and lint reports are in **`Solar-Sandbox-build-reports`**.
+
+No API keys, `.env`, Firebase configuration, or signing secrets are required for a debug APK. The checked-in Gradle wrapper selects Gradle 9.3.1, and CI installs API 36.1 and Build-Tools 36.0.0 explicitly.
+
+#### Debug signing and in-place updates
+
+- If `debug.keystore` exists in the repository root (for example, in AI Studio), the app retains that signing identity.
+- Otherwise Gradle uses its standard debug signer and generates `~/.android/debug.keystore` automatically. Fresh CI runners can generate different certificates, so these builds are installable but are **not guaranteed to update a previously installed build**.
+- For stable CI debug updates, keep your existing debug keystore securely and store its base64 bytes in the optional Actions secret `DEBUG_KEYSTORE_BASE64`. It must use alias `androiddebugkey` and the standard `android` store/key passwords. CI restores it to the ignored root `debug.keystore`; never commit the key or its base64 contents.
+- An APK with a different certificate cannot replace an installed app. Export any saved simulations before choosing to uninstall; uninstalling deletes the app's data. Production releases should use the separate release keystore below.
 
 ### 2. Enable Signed Release APKs & AABs on GitHub
 To have GitHub Actions also build a production-signed `app-release.apk` and `app-release.aab` (and attach them to GitHub Releases on `v*` tags):
@@ -26,12 +35,28 @@ To have GitHub Actions also build a production-signed `app-release.apk` and `app
 
 ---
 
-## Option B: Local Signed Release APK Build
+## Option B: Local Builds
 
 ### Prerequisites
-- **JDK 17+** (includes `keytool` and `jarsigner`)
-- **Android SDK** (`compileSdk 36`, Build-Tools 35/36) with `ANDROID_SDK_ROOT` or `ANDROID_HOME` configured
-- **Gradle 9.3.1**
+- **JDK 17+** (CI uses JDK 21; includes `keytool` and `jarsigner`)
+- **Android SDK** (API **36.1**, Build-Tools **36.0.0**) with `ANDROID_HOME` or `ANDROID_SDK_ROOT` configured, or `sdk.dir` in ignored `local.properties`
+- The included **Gradle 9.3.1 wrapper**; no global Gradle installation is needed
+
+Install the exact SDK packages after accepting the Android SDK licenses:
+
+```bash
+sdkmanager "platform-tools" "build-tools;36.0.0" "platforms;android-36.1"
+```
+
+### Build and Check a Debug APK (No Signing Setup)
+
+```bash
+./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
+```
+
+On Windows use `gradlew.bat` instead. The signed debug APK is `app/build/outputs/apk/debug/app-debug.apk`.
+
+The standard Android SDK host build-tools are not native Termux/Android binaries. On a phone, use the GitHub Actions workflow above rather than treating a successful Java/Gradle preflight as a completed APK build.
 
 ### Step 1: Generate a Release Signing Keystore
 
@@ -61,22 +86,22 @@ export KEY_PASSWORD="your_key_password"
 ### Step 3: Run Unit & Physics Verification Tests
 
 ```bash
-gradle :app:testDebugUnitTest
+./gradlew :app:testDebugUnitTest
 ```
 
 ### Step 4: Build the Signed Release APK (or AAB)
 
 ```bash
-gradle :app:assembleRelease
+./gradlew :app:assembleRelease
 ```
 
 Output locations:
 - Signed APK: `app/build/outputs/apk/release/app-release.apk`
-- Signed App Bundle: `app/build/outputs/bundle/release/app-release.aab` (`gradle :app:bundleRelease`)
+- Signed App Bundle: `app/build/outputs/bundle/release/app-release.aab` (`./gradlew :app:bundleRelease`)
 
 ### Step 5: Verify the APK Signature
 
 ```bash
-$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner verify --print-certs \
+"${ANDROID_HOME:-$ANDROID_SDK_ROOT}/build-tools/36.0.0/apksigner" verify --print-certs \
   app/build/outputs/apk/release/app-release.apk
 ```

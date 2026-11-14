@@ -54,3 +54,13 @@
 - **True Scale vs. Sandbox Clear View:** At exact 1:1 km/AU scale, terrestrial planets are sub-pixel dots at solar-system zoom levels. The default *Sandbox Clear View* applies type-based visual scaling while retaining exact NASA/JPL values for all physics telemetry; you can toggle *True Astronomical Scale* in Settings.
 - **N-Body Particle Scaling:** Asteroid-to-asteroid mutual $N^2$ forces are skipped for background belt clusters to maintain 60 FPS on mid-range mobile CPUs (they still experience full gravity from the Sun and all major planets/black holes).
 - **Gravitational Lensing:** Uses a fast screen-space Einstein-ring shader pass rather than multi-bounce 3D Kerr geodesic raytracing to stay within mid-range mobile GPU thermal budgets.
+
+## Build an APK
+
+Use a desktop Android SDK with API 36.1 and Build-Tools 36.0.0, then run the included, checksum-pinned Gradle 9.3.1 wrapper:
+
+```bash
+./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
+```
+
+No custom keystore or API keys are needed for debug builds. GitHub Actions runs the same checks on a clean checkout and uploads the verified APK and reports. See [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md) for downloads, stable debug signing, release signing, and phone/Termux guidance.
