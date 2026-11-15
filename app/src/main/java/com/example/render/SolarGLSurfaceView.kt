@@ -119,6 +119,8 @@ class SolarGLSurfaceView(
                         onTapBody(picked)
                         performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
                     }
+                } else if (interactionMode == InteractionMode.SPAWN_TAP) {
+                    renderer.spawnPreviewPos = renderer.screenToEclipticWorldPos(event.x, event.y)
                 } else if (interactionMode == InteractionMode.ORBIT_SELECT) {
                     mainHandler.postDelayed(longPressRunnable, 420L)
                 }
@@ -130,6 +132,7 @@ class SolarGLSurfaceView(
                 mainHandler.removeCallbacks(longPressRunnable)
                 isSlingshotDragging = false
                 renderer.slingshotPreview = null
+                renderer.spawnPreviewPos = null
                 return true
             }
 
@@ -173,6 +176,16 @@ class SolarGLSurfaceView(
                     return true
                 }
 
+                if (interactionMode == InteractionMode.SPAWN_TAP) {
+                    val moved = hypot((event.x - downX).toDouble(), (event.y - downY).toDouble())
+                    if (moved < 36.0) {
+                        renderer.spawnPreviewPos = renderer.screenToEclipticWorldPos(event.x, event.y)
+                        return true
+                    } else {
+                        renderer.spawnPreviewPos = null
+                    }
+                }
+
                 // 1-finger camera orbit
                 renderer.yawDeg = (renderer.yawDeg - dx * 0.28f) % 360f
                 renderer.pitchDeg = (renderer.pitchDeg + dy * 0.24f).coerceIn(-84f, 84f)
@@ -198,13 +211,16 @@ class SolarGLSurfaceView(
                     return true
                 }
 
+                val pendingSpawnPos = renderer.spawnPreviewPos
+                renderer.spawnPreviewPos = null
+
                 val elapsed = System.currentTimeMillis() - downTimeMs
                 val moved = hypot((event.x - downX).toDouble(), (event.y - downY).toDouble())
-                if (!isMultiTouch && elapsed < 280L && moved < 22.0) {
-                    if (interactionMode == InteractionMode.SPAWN_TAP) {
-                        val worldPt = renderer.screenToEclipticWorldPos(event.x, event.y)
+                if (event.actionMasked == MotionEvent.ACTION_UP && !isMultiTouch) {
+                    if (interactionMode == InteractionMode.SPAWN_TAP && elapsed < 480L && moved < 36.0) {
+                        val worldPt = pendingSpawnPos ?: renderer.screenToEclipticWorldPos(event.x, event.y)
                         if (worldPt != null) onTapSpawnWorld(worldPt)
-                    } else {
+                    } else if (elapsed < 280L && moved < 22.0) {
                         val picked = renderer.pickBodyAt(event.x, event.y)
                         onTapBody(picked)
                     }

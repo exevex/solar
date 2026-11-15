@@ -70,6 +70,8 @@ data class SandboxUiState(
     val showPresetsDialog: Boolean = false,
     val showQualityDialog: Boolean = false,
     val showSaveLoadDialog: Boolean = false,
+    val spawnStationary: Boolean = false,
+    val showEarthMapOverlay: Boolean = false,
     val allBodiesList: List<CelestialBody> = emptyList()
 )
 
@@ -310,8 +312,8 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
         glRenderer?.focusedBodyId = firstId
         glRenderer?.manualPanOffset = Vec3d.ZERO
         glRenderer?.yawDeg = 28f
-        glRenderer?.pitchDeg = 28f
-        glRenderer?.distanceAu = 7.5
+        glRenderer?.pitchDeg = 32f
+        glRenderer?.distanceAu = 4.6
     }
 
     fun toggleCinematicMode() {
@@ -360,6 +362,19 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
         syncConfigImmediate()
     }
 
+    fun toggleHabitableZone() {
+        engine.updateConfig { it.copy(showHabitableZone = !it.showHabitableZone) }
+        syncConfigImmediate()
+    }
+
+    fun toggleSpawnStationary() {
+        _uiState.update { it.copy(spawnStationary = !it.spawnStationary) }
+    }
+
+    fun toggleEarthMapOverlay() {
+        _uiState.update { it.copy(showEarthMapOverlay = !it.showEarthMapOverlay) }
+    }
+
     fun toggleHawkingEvaporation() {
         engine.updateConfig { it.copy(hawkingEvaporation = !it.hawkingEvaporation) }
         syncConfigImmediate()
@@ -390,6 +405,9 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
     fun setToolTab(tab: SandboxToolTab) {
         _uiState.update {
             val next = if (it.activeToolTab == tab) SandboxToolTab.NONE else tab
+            if (next != SandboxToolTab.SPAWN) {
+                glRenderer?.spawnPreviewPos = null
+            }
             it.copy(activeToolTab = next)
         }
     }
@@ -414,11 +432,22 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
 
     fun spawnAtWorldPos(worldPos: Vec3d, explicitVel: Vec3d? = null) {
         val tpl = _uiState.value.selectedSpawnTemplate
-        val vel = explicitVel ?: computeCircularOrbitVelocity(worldPos)
+        val vel = explicitVel ?: if (_uiState.value.spawnStationary) Vec3d.ZERO else computeCircularOrbitVelocity(worldPos)
+        val archetype = when (tpl.id) {
+            "earth_like" -> BodyArchetype.EARTH
+            "rocky_mars" -> BodyArchetype.MARS
+            "gas_giant" -> BodyArchetype.JUPITER
+            "ringed_giant" -> BodyArchetype.SATURN
+            "ice_giant" -> BodyArchetype.NEPTUNE
+            "moon" -> BodyArchetype.LUNA
+            "comet" -> BodyArchetype.COMET
+            else -> BodyArchetype.GENERIC_ROCK
+        }
         val body = CelestialBody(
             id = 0L,
             name = tpl.name,
             type = tpl.type,
+            archetype = archetype,
             spectralClass = tpl.spectralClass,
             pos = worldPos,
             vel = vel,
@@ -432,7 +461,7 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
             seed = rng.nextFloat() * 100f,
             hasClouds = tpl.hasClouds,
             ringSystem = tpl.ringSystem,
-            accretionActivity = if (tpl.type == BodyType.BLACK_HOLE) 0.7f else 0f,
+            accretionActivity = 0.0f,
             evolutionStage = if (tpl.type.isLuminous) EvolutionStage.MAIN_SEQUENCE else EvolutionStage.NONE
         )
         val newId = engine.spawnBody(body)
@@ -468,23 +497,19 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
 
     // ==================== LIVE OBJECT EDITING ====================
 
-    fun editSelectedBody(transform: (CelestialBody) -> CelestialBody) {
+    fun editSelectedBody(
+        scaleRadiusWithMass: Boolean = true,
+        transform: (CelestialBody) -> CelestialBody
+    ) {
         val id = _uiState.value.selectedBodyId ?: return
-        engine.updateBody(id) { original ->
-            val updated = transform(original)
-            if (updated.type == BodyType.BLACK_HOLE && updated.massSolar != original.massSolar) {
-                updated.copy(radiusKm = 2.95325 * updated.massSolar)
-            } else {
-                updated
-            }
-        }
+        engine.updateBodyCoupled(id, scaleRadiusWithMass, transform)
         engine.getBodyById(id)?.let { updated ->
             _uiState.update { it.copy(selectedTelemetry = engine.computeTelemetry(updated)) }
         }
     }
 
     fun editBodyDensity(newDensityGCm3: Double) {
-        editSelectedBody { b ->
+        editSelectedBody(scaleRadiusWithMass = false) { b ->
             val currentD = b.densityGCm3().coerceAtLeast(1e-4)
             val ratio = (newDensityGCm3 / currentD).coerceIn(1e-4, 1e4)
             b.copy(massSolar = (b.massSolar * ratio).coerceAtLeast(1e-18))
@@ -543,11 +568,12 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
         glRenderer?.focusedBodyId = focusId
         glRenderer?.selectedBodyId = focusId
         glRenderer?.manualPanOffset = Vec3d.ZERO
+        glRenderer?.pitchDeg = 32f
         glRenderer?.distanceAu = when (preset) {
             SystemPreset.TRAPPIST_1 -> 2.4
             SystemPreset.BINARY_BLACK_HOLES -> 4.8
             SystemPreset.GALAXY_COLLISION -> 14.0
-            else -> 7.5
+            else -> 4.6
         }
         _uiState.update {
             it.copy(

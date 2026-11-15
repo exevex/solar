@@ -10,6 +10,8 @@
     <string name="cd_close_panel">Close panel</string>
     <string name="cd_toggle_trails">Toggle orbit trails</string>
     <string name="cd_toggle_labels">Toggle object labels</string>
+    <string name="cd_toggle_habitable_zone">Toggle habitable zone view</string>
+    <string name="cd_earth_map">Toggle live Earth surface map</string>
     <string name="cd_focus_body">Focus camera on selected object</string>
     <string name="cd_delete_body">Delete selected object</string>
     <string name="cd_mode_select">Select and orbit mode</string>

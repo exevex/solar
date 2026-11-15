@@ -110,6 +110,7 @@ fun QualitySettingsDialog(
     onBloomChange: (Float) -> Unit,
     onIntegratorChange: (IntegratorMode) -> Unit,
     onToggleTrueScale: () -> Unit,
+    onToggleHabitableZone: () -> Unit,
     onDismiss: () -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
@@ -164,11 +165,23 @@ fun QualitySettingsDialog(
                 }
 
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text("True Astronomical Scale", style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
                         Text("Off = Sandbox Clear View • On = Exact 1:1 km/AU radii", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
                     }
                     Switch(checked = uiState.config.trueScaleMode, onCheckedChange = { onToggleTrueScale() })
+                }
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Habitable Zone Overlay", style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
+                        Text("Show liquid-water Goldilocks ring around stars", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                    }
+                    Switch(
+                        checked = uiState.config.showHabitableZone,
+                        onCheckedChange = { onToggleHabitableZone() },
+                        modifier = Modifier.testTag("dialog_habitable_zone_switch")
+                    )
                 }
 
                 Text("N-Body Integrator", style = MaterialTheme.typography.labelMedium, color = TextSecondary)

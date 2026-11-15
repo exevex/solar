@@ -14,6 +14,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.render.SolarGLRenderer
 import com.example.render.SolarGLSurfaceView
+import com.example.simulation.BodyArchetype
+import com.example.simulation.BodyType
 import com.example.simulation.Vec3d
 import com.example.ui.components.*
 import com.example.ui.theme.CyanTelemetry
@@ -102,6 +104,8 @@ fun SolarSandboxScreen(viewModel: SandboxViewModel) {
                         onOpenQuality = { viewModel.setQualityDialogVisible(true) },
                         onToggleOrbits = { viewModel.toggleOrbits() },
                         onToggleLabels = { viewModel.toggleLabels() },
+                        onToggleHabitableZone = { viewModel.toggleHabitableZone() },
+                        onToggleEarthMap = { viewModel.toggleEarthMapOverlay() },
                         onResetCamera = { viewModel.resetCameraView() },
                         onToggleCinematic = { viewModel.toggleCinematicMode() },
                         modifier = Modifier.align(Alignment.TopCenter)
@@ -119,6 +123,26 @@ fun SolarSandboxScreen(viewModel: SandboxViewModel) {
                         onSelectTab = { viewModel.setToolTab(it) },
                         modifier = Modifier.align(Alignment.CenterStart)
                     )
+
+                    // Live Earth Surface Map Preview HUD window
+                    if (uiState.showEarthMapOverlay) {
+                        val earthBody = uiState.allBodiesList.firstOrNull {
+                            it.name.equals("Earth", ignoreCase = true)
+                        } ?: uiState.allBodiesList.firstOrNull {
+                            it.archetype == BodyArchetype.EARTH || it.type == BodyType.EARTH_LIKE
+                        }
+                        EarthMapPreviewCard(
+                            earthBody = earthBody,
+                            onClose = { viewModel.toggleEarthMapOverlay() },
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .padding(
+                                    start = 78.dp,
+                                    bottom = if (uiState.activeToolTab == SandboxToolTab.SPAWN) 152.dp else 74.dp
+                                )
+                                .width(238.dp)
+                        )
+                    }
 
                     // Right Context Tool Drawer
                     Box(
@@ -148,7 +172,7 @@ fun SolarSandboxScreen(viewModel: SandboxViewModel) {
                                 telemetry = uiState.selectedTelemetry,
                                 onFocusBody = { viewModel.focusAndZoomToBody(it) },
                                 onDeleteBody = { viewModel.deleteSelectedBody() },
-                                onEditBody = { viewModel.editSelectedBody(it) },
+                                onEditBody = { viewModel.editSelectedBody(transform = it) },
                                 onEditDensity = { viewModel.editBodyDensity(it) },
                                 onNudgeOrbit = { viewModel.nudgeSelectedOrbitSpeed(it) },
                                 onClose = { viewModel.setToolTab(SandboxToolTab.NONE) }
@@ -163,6 +187,7 @@ fun SolarSandboxScreen(viewModel: SandboxViewModel) {
                             uiState = uiState,
                             onSelectCategory = { viewModel.selectSpawnCategory(it) },
                             onSelectTemplate = { viewModel.selectSpawnTemplate(it) },
+                            onToggleSpawnStationary = { viewModel.toggleSpawnStationary() },
                             onSpawnQuickOrbit = {
                                 val r = 1.6 + (uiState.bodyCount % 5) * 0.45
                                 viewModel.spawnAtWorldPos(Vec3d(r, 0.0, 0.0))
@@ -203,6 +228,7 @@ fun SolarSandboxScreen(viewModel: SandboxViewModel) {
                 onBloomChange = { viewModel.setBloomIntensity(it) },
                 onIntegratorChange = { viewModel.setIntegrator(it) },
                 onToggleTrueScale = { viewModel.toggleTrueScale() },
+                onToggleHabitableZone = { viewModel.toggleHabitableZone() },
                 onDismiss = { viewModel.setQualityDialogVisible(false) }
             )
         }

@@ -35,6 +35,7 @@ object SnapshotSerializer {
             put("trueScaleMode", snapshot.config.trueScaleMode)
             put("showOrbits", snapshot.config.showOrbits)
             put("showLabels", snapshot.config.showLabels)
+            put("showHabitableZone", snapshot.config.showHabitableZone)
         }
         root.put("config", cfg)
 
@@ -117,7 +118,8 @@ object SnapshotSerializer {
                 stellarEvolutionRateGyrPerSec = cfgObj.optDouble("stellarEvolutionRateGyrPerSec", 0.0),
                 trueScaleMode = cfgObj.optBoolean("trueScaleMode", false),
                 showOrbits = cfgObj.optBoolean("showOrbits", true),
-                showLabels = cfgObj.optBoolean("showLabels", true)
+                showLabels = cfgObj.optBoolean("showLabels", true),
+                showHabitableZone = cfgObj.optBoolean("showHabitableZone", false)
             )
         } else SimulationConfig()
 

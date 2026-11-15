@@ -207,4 +207,74 @@ class SolarPhysicsTest {
         assertEquals(BodyArchetype.JUPITER, decodedJupiter.archetype)
         assertEquals(3.25, decodedBh.absorbedMassSolar, 1e-4)
     }
+
+    @Test
+    fun `coupled star mass increase scales luminosity, temperature, and spectral class`() {
+        val sun = CelestialBody(
+            id = 1L, name = "Sun", type = BodyType.STAR, spectralClass = SpectralClass.G,
+            pos = Vec3d.ZERO, vel = Vec3d.ZERO, massSolar = 1.0, radiusKm = 696_340.0,
+            temperatureK = 5778.0, luminositySolar = 1.0
+        )
+        val (bigger, _) = PhysicsEngine.applyCoupledAstrophysics(sun, sun.copy(massSolar = 5.0))
+        assertTrue("Expected luminosity > 100 L_sun for 5 M_sun star, got ${bigger.luminositySolar}", bigger.luminositySolar > 100.0)
+        assertTrue("Expected hotter temperature for 5 M_sun star, got ${bigger.temperatureK}", bigger.temperatureK > 10000.0)
+        assertEquals(SpectralClass.B, bigger.spectralClass)
+
+        val wd = CelestialBody(
+            id = 2L, name = "WD", type = BodyType.WHITE_DWARF,
+            pos = Vec3d.ZERO, vel = Vec3d.ZERO, massSolar = 0.85, radiusKm = 7000.0,
+            temperatureK = 26000.0, luminositySolar = 0.06
+        )
+        val (ns, wdMsg) = PhysicsEngine.applyCoupledAstrophysics(wd, wd.copy(massSolar = 1.6))
+        assertEquals(BodyType.NEUTRON_STAR, ns.type)
+        assertNotNull(wdMsg)
+
+        val (bh, nsMsg) = PhysicsEngine.applyCoupledAstrophysics(ns, ns.copy(massSolar = 3.2))
+        assertEquals(BodyType.BLACK_HOLE, bh.type)
+        assertNotNull(nsMsg)
+    }
+
+    @Test
+    fun `tiny asteroid hitting sun produces zero craters and zero explosion particles`() {
+        val engine = PhysicsEngine()
+        val sun = CelestialBody(
+            id = 1L, name = "Sun", type = BodyType.STAR, spectralClass = SpectralClass.G,
+            pos = Vec3d.ZERO, vel = Vec3d.ZERO, massSolar = 1.0, radiusKm = 696_340.0,
+            temperatureK = 5778.0, luminositySolar = 1.0
+        )
+        val speck = CelestialBody(
+            id = 2L, name = "Tiny Asteroid", type = BodyType.ASTEROID,
+            pos = Vec3d(0.01, 0.0, 0.0), vel = Vec3d(-3.0, 0.0, 0.0),
+            massSolar = 1e-10, radiusKm = 450.0, temperatureK = 180.0
+        )
+        engine.loadSnapshot(SimulationSnapshot("SunImpact", "test", 0.0, listOf(sun, speck), SimulationConfig(timeScaleYearsPerSec = 0.05)))
+        repeat(10) { engine.step(0.02) }
+        val frame = engine.buildRenderFrameState(60f)
+        assertEquals(1, frame.bodies.size)
+        val survivor = frame.bodies.first()
+        assertTrue("Sun must not accumulate craters", survivor.craters.isEmpty())
+        assertTrue("Small asteroid hitting Sun should not spray rocky explosion particles", frame.particles.isEmpty())
+    }
+
+    @Test
+    fun `snapshot serialization preserves showHabitableZone toggle`() {
+        val snap = SolarSystemPresets.buildPreset(SystemPreset.SOLAR_SYSTEM).let {
+            it.copy(config = it.config.copy(showHabitableZone = true))
+        }
+        val json = SnapshotSerializer.toJsonString(snap)
+        val decoded = SnapshotSerializer.fromJsonString(json)
+        assertTrue(decoded.config.showHabitableZone)
+    }
+
+    @Test
+    fun `live Earth geography map responds to temperature changes`() {
+        val baseEarth = SolarSystemPresets.buildPreset(SystemPreset.SOLAR_SYSTEM).bodies.first { it.name == "Earth" }
+        val (_, temperate) = EarthGeography.renderLiveEarthMap(baseEarth)
+        val (_, frozen) = EarthGeography.renderLiveEarthMap(baseEarth.copy(temperatureK = 175.0))
+        val (_, magma) = EarthGeography.renderLiveEarthMap(baseEarth.copy(temperatureK = 1600.0))
+
+        assertTrue("Temperate Earth should have high habitability, got ${temperate.habitabilityPct}", temperate.habitabilityPct >= 70)
+        assertTrue("Frozen Earth should have high ice cover, got ${frozen.iceCoverPct}", frozen.iceCoverPct >= 80)
+        assertTrue("Hot magma Earth should show molten coverage, got ${magma.moltenPct}", magma.moltenPct > 10)
+    }
 }

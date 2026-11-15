@@ -137,27 +137,27 @@ data class CelestialBody(
         if (trueScale) return physicsRadiusAu
         return when (type) {
             BodyType.STAR, BodyType.RED_GIANT ->
-                (physicsRadiusAu * 18.0).coerceIn(0.015, 0.55)
+                (physicsRadiusAu * 26.0).coerceIn(0.028, 0.58)
             BodyType.WHITE_DWARF, BodyType.NEUTRON_STAR ->
-                (physicsRadiusAu * 120.0).coerceIn(0.008, 0.032)
+                (physicsRadiusAu * 180.0).coerceIn(0.015, 0.045)
             BodyType.BLACK_HOLE -> {
                 val rsAu = AstroConstants.SCHWARZSCHILD_SUN_AU * massSolar
-                (rsAu * 3600.0).coerceIn(0.014, 0.24)
+                (rsAu * 4200.0).coerceIn(0.024, 0.28)
             }
             BodyType.GAS_GIANT ->
-                (physicsRadiusAu * 155.0).coerceIn(0.022, 0.11)
+                (physicsRadiusAu * 280.0).coerceIn(0.045, 0.135)
             BodyType.ICE_GIANT ->
-                (physicsRadiusAu * 210.0).coerceIn(0.016, 0.075)
+                (physicsRadiusAu * 340.0).coerceIn(0.035, 0.095)
             BodyType.EARTH_LIKE, BodyType.TERRESTRIAL_PLANET ->
-                (physicsRadiusAu * 380.0).coerceIn(0.009, 0.042)
+                (physicsRadiusAu * 720.0).coerceIn(0.020, 0.062)
             BodyType.DWARF_PLANET ->
-                (physicsRadiusAu * 650.0).coerceIn(0.006, 0.02)
+                (physicsRadiusAu * 1100.0).coerceIn(0.012, 0.028)
             BodyType.MOON ->
-                (physicsRadiusAu * 480.0).coerceIn(0.0035, 0.015)
+                (physicsRadiusAu * 750.0).coerceIn(0.008, 0.020)
             BodyType.ASTEROID, BodyType.COMET ->
-                (physicsRadiusAu * 1200.0).coerceIn(0.0025, 0.009)
+                (physicsRadiusAu * 1500.0).coerceIn(0.004, 0.012)
             BodyType.DEBRIS ->
-                (physicsRadiusAu * 900.0).coerceIn(0.002, 0.008)
+                (physicsRadiusAu * 1100.0).coerceIn(0.003, 0.010)
         }
     }
 
@@ -251,7 +251,8 @@ data class SimulationConfig(
     val stellarEvolutionRateGyrPerSec: Double = 0.0,
     val trueScaleMode: Boolean = false,
     val showOrbits: Boolean = true,
-    val showLabels: Boolean = true
+    val showLabels: Boolean = true,
+    val showHabitableZone: Boolean = false
 )
 
 data class SimulationSnapshot(

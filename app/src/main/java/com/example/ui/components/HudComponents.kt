@@ -67,6 +67,8 @@ fun TopTelemetryBar(
     onOpenQuality: () -> Unit,
     onToggleOrbits: () -> Unit,
     onToggleLabels: () -> Unit,
+    onToggleHabitableZone: () -> Unit,
+    onToggleEarthMap: () -> Unit,
     onResetCamera: () -> Unit,
     onToggleCinematic: () -> Unit,
     modifier: Modifier = Modifier
@@ -163,6 +165,22 @@ fun TopTelemetryBar(
                     onClick = onToggleLabels
                 )
                 HudIconButton(
+                    icon = Icons.Default.Eco,
+                    contentDesc = stringResource(R.string.cd_toggle_habitable_zone),
+                    active = uiState.config.showHabitableZone,
+                    activeTint = EmeraldOrbit,
+                    tag = "toggle_habitable_zone_button",
+                    onClick = onToggleHabitableZone
+                )
+                HudIconButton(
+                    icon = Icons.Default.Map,
+                    contentDesc = stringResource(R.string.cd_earth_map),
+                    active = uiState.showEarthMapOverlay,
+                    activeTint = EmeraldOrbit,
+                    tag = "toggle_earth_map_button",
+                    onClick = onToggleEarthMap
+                )
+                HudIconButton(
                     icon = Icons.Default.CenterFocusStrong,
                     contentDesc = stringResource(R.string.cd_focus_body),
                     active = false,
@@ -201,6 +219,7 @@ private fun HudIconButton(
     contentDesc: String,
     active: Boolean,
     tag: String,
+    activeTint: Color = CyanTelemetry,
     onClick: () -> Unit
 ) {
     IconButton(
@@ -212,7 +231,7 @@ private fun HudIconButton(
         Icon(
             imageVector = icon,
             contentDescription = contentDesc,
-            tint = if (active) CyanTelemetry else TextSecondary,
+            tint = if (active) activeTint else TextSecondary,
             modifier = Modifier.size(20.dp)
         )
     }

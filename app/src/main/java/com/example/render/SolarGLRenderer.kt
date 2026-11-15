@@ -36,8 +36,8 @@ class SolarGLRenderer(
 
     // Camera state (thread-safe volatile / synchronized updates from touch thread)
     @Volatile var yawDeg: Float = 28f
-    @Volatile var pitchDeg: Float = 26f
-    @Volatile var distanceAu: Double = 7.5
+    @Volatile var pitchDeg: Float = 32f
+    @Volatile var distanceAu: Double = 4.6
     @Volatile var focusedBodyId: Long? = 1L
     @Volatile var selectedBodyId: Long? = 1L
     @Volatile var manualPanOffset: Vec3d = Vec3d.ZERO
@@ -45,6 +45,7 @@ class SolarGLRenderer(
 
     @Volatile var graphicsSettings: GraphicsSettings = GraphicsSettings()
     @Volatile var slingshotPreview: SlingshotPreview? = null
+    @Volatile var spawnPreviewPos: Vec3d? = null
 
     private var viewportW = 1280
     private var viewportH = 720
@@ -70,8 +71,8 @@ class SolarGLRenderer(
     private lateinit var planetProg: GlShaderProgram
     private lateinit var starProg: GlShaderProgram
     private lateinit var coronaProg: GlShaderProgram
-    private lateinit var bhCoreProg: GlShaderProgram
-    private lateinit var accretionProg: GlShaderProgram
+    private lateinit var bhRelativisticProg: GlShaderProgram
+    private lateinit var habitableZoneProg: GlShaderProgram
     private lateinit var bhJetProg: GlShaderProgram
     private lateinit var ringProg: GlShaderProgram
     private lateinit var instancedRockProg: GlShaderProgram
@@ -80,6 +81,8 @@ class SolarGLRenderer(
     private lateinit var brightPassProg: GlShaderProgram
     private lateinit var blurProg: GlShaderProgram
     private lateinit var compositeProg: GlShaderProgram
+
+    private var earthTexId = 0
 
     // Meshes
     private lateinit var sphereLod0: GlMesh
@@ -131,8 +134,8 @@ class SolarGLRenderer(
         planetProg = GlShaderProgram.compile(ShaderLibrary.PLANET_VS, ShaderLibrary.PLANET_FS, "Planet")
         starProg = GlShaderProgram.compile(ShaderLibrary.STAR_VS, ShaderLibrary.STAR_FS, "Star")
         coronaProg = GlShaderProgram.compile(ShaderLibrary.CORONA_VS, ShaderLibrary.CORONA_FS, "Corona")
-        bhCoreProg = GlShaderProgram.compile(ShaderLibrary.BLACK_HOLE_CORE_VS, ShaderLibrary.BLACK_HOLE_CORE_FS, "BHCore")
-        accretionProg = GlShaderProgram.compile(ShaderLibrary.ACCRETION_DISK_VS, ShaderLibrary.ACCRETION_DISK_FS, "Accretion")
+        bhRelativisticProg = GlShaderProgram.compile(ShaderLibrary.BH_RELATIVISTIC_VS, ShaderLibrary.BH_RELATIVISTIC_FS, "BHRel")
+        habitableZoneProg = GlShaderProgram.compile(ShaderLibrary.HABITABLE_ZONE_VS, ShaderLibrary.HABITABLE_ZONE_FS, "HabZone")
         bhJetProg = GlShaderProgram.compile(ShaderLibrary.CORONA_VS, ShaderLibrary.BH_JET_FS, "BHJet")
         ringProg = GlShaderProgram.compile(ShaderLibrary.RING_VS, ShaderLibrary.RING_FS, "Ring")
         instancedRockProg = GlShaderProgram.compile(ShaderLibrary.INSTANCED_ROCK_VS, ShaderLibrary.INSTANCED_ROCK_FS, "InstRock")
@@ -141,6 +144,28 @@ class SolarGLRenderer(
         brightPassProg = GlShaderProgram.compile(ShaderLibrary.QUAD_VS, ShaderLibrary.BRIGHT_PASS_FS, "Bright")
         blurProg = GlShaderProgram.compile(ShaderLibrary.QUAD_VS, ShaderLibrary.BLUR_FS, "Blur")
         compositeProg = GlShaderProgram.compile(ShaderLibrary.QUAD_VS, ShaderLibrary.COMPOSITE_FS, "Composite")
+
+        val texArr = IntArray(1)
+        GLES30.glGenTextures(1, texArr, 0)
+        earthTexId = texArr[0]
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, earthTexId)
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D,
+            0,
+            GLES30.GL_R8,
+            EarthGeography.MAP_W,
+            EarthGeography.MAP_H,
+            0,
+            GLES30.GL_RED,
+            GLES30.GL_UNSIGNED_BYTE,
+            EarthGeography.createGlByteBuffer()
+        )
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_REPEAT)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
 
         sphereLod0 = MeshFactory.createSphere(46, 68)
         sphereLod1 = MeshFactory.createSphere(24, 34)
@@ -383,13 +408,6 @@ class SolarGLRenderer(
             when {
                 b.type == BodyType.BLACK_HOLE -> {
                     blackHoles.add(b)
-                    bhCoreProg.use()
-                    bhCoreProg.setMat4("uModel", modelMatrix)
-                    bhCoreProg.setMat4("uViewProj", viewProjMatrix)
-                    bhCoreProg.setFloat("uLogDepthCoef", logDepthCoef)
-                    bhCoreProg.setVec3("uCamPos", eyeX, eyeY, eyeZ)
-                    bhCoreProg.setFloat("uAccretionActivity", b.accretionActivity)
-                    mesh.draw()
                 }
                 b.type.isLuminous -> {
                     coronasToDraw.add(b)
@@ -419,6 +437,9 @@ class SolarGLRenderer(
                     if (b.type == BodyType.COMET) coronasToDraw.add(b)
 
                     planetProg.use()
+                    GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+                    GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, earthTexId)
+                    planetProg.setInt("uEarthTex", 0)
                     planetProg.setMat4("uModel", modelMatrix)
                     planetProg.setMat4("uViewProj", viewProjMatrix)
                     planetProg.setFloat("uLogDepthCoef", logDepthCoef)
@@ -439,6 +460,7 @@ class SolarGLRenderer(
                     planetProg.setInt("uBodyArchetype", b.archetype.shaderId)
                     planetProg.setFloat("uSeed", b.seed)
                     planetProg.setFloat("uTime", animTimeSec)
+                    planetProg.setFloat("uTempK", b.temperatureK.toFloat())
                     planetProg.setInt("uFbmOctaves", quality.fbmOctaves)
                     planetProg.setVec3("uAlbedo", b.albedoColor.first, b.albedoColor.second, b.albedoColor.third)
                     planetProg.setFloat("uAtmoDensity", b.atmosphereDensity)
@@ -536,49 +558,96 @@ class SolarGLRenderer(
             annulusMesh.draw()
         }
 
-        // Additive Black Hole Relativistic Accretion Disks, Lensed Einstein Halo & Relativistic Polar Jets
-        GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE)
-        for (bh in blackHoles) {
-            val rel = bh.pos - cameraOrigin
-            val rad = bh.getVisualRadiusAu(trueScale).toFloat()
-
-            // 1) Primary equatorial relativistic Doppler-beamed accretion disk
-            Matrix.setIdentityM(modelMatrix, 0)
-            Matrix.translateM(modelMatrix, 0, rel.x.toFloat(), rel.y.toFloat(), rel.z.toFloat())
-            Matrix.rotateM(modelMatrix, 0, 14f, 0.25f, 0f, 1f)
-            accretionProg.use()
-            accretionProg.setMat4("uModel", modelMatrix)
-            accretionProg.setMat4("uViewProj", viewProjMatrix)
-            accretionProg.setFloat("uLogDepthCoef", logDepthCoef)
-            accretionProg.setFloat("uInnerRad", rad * 1.28f)
-            accretionProg.setFloat("uOuterRad", rad * (5.6f + bh.accretionActivity.coerceAtMost(1.5f) * 1.2f))
-            accretionProg.setVec3("uCamPos", eyeX, eyeY, eyeZ)
-            accretionProg.setVec3("uBhPos", rel.x.toFloat(), rel.y.toFloat(), rel.z.toFloat())
-            accretionProg.setFloat("uTime", animTimeSec)
-            accretionProg.setFloat("uAccretionActivity", bh.accretionActivity)
-            accretionProg.setInt("uIsLensedHalo", 0)
-            annulusMesh.draw()
-
-            // 2) Gravitationally lensed secondary halo arch wrapping over/under the black hole shadow (Gargantua-style)
-            val vx = eyeX - rel.x.toFloat()
-            val vz = eyeZ - rel.z.toFloat()
-            val camYawDeg = Math.toDegrees(atan2(vx.toDouble(), vz.toDouble())).toFloat()
-            Matrix.setIdentityM(modelMatrix, 0)
-            Matrix.translateM(modelMatrix, 0, rel.x.toFloat(), rel.y.toFloat(), rel.z.toFloat())
-            Matrix.rotateM(modelMatrix, 0, camYawDeg, 0f, 1f, 0f)
-            Matrix.rotateM(modelMatrix, 0, 82f, 1f, 0f, 0f)
-            accretionProg.setMat4("uModel", modelMatrix)
-            accretionProg.setFloat("uInnerRad", rad * 1.04f)
-            accretionProg.setFloat("uOuterRad", rad * 2.15f)
-            accretionProg.setInt("uIsLensedHalo", 1)
-            annulusMesh.draw()
-
-            // 3) Relativistic Bipolar Jets when black hole is actively accreting matter
-            if (bh.accretionActivity > 0.35f) {
-                val jetLen = rad * (5.5f + bh.accretionActivity * 4.5f)
+        // Habitable Zone Circumstellar Rings (Goldilocks zone 0.85*sqrt(L) .. 1.78*sqrt(L) AU)
+        if (frame.config.showHabitableZone) {
+            for (st in stars) {
+                if (st.luminositySolar <= 0.0001) continue
+                val sqrtL = sqrt(st.luminositySolar).toFloat().coerceIn(0.05f, 400f)
+                val innerAu = 0.85f * sqrtL
+                val outerAu = 1.78f * sqrtL
+                val rel = st.pos - cameraOrigin
                 Matrix.setIdentityM(modelMatrix, 0)
                 Matrix.translateM(modelMatrix, 0, rel.x.toFloat(), rel.y.toFloat(), rel.z.toFloat())
-                // Vertical billboard facing camera around Y spin axis
+                habitableZoneProg.use()
+                habitableZoneProg.setMat4("uModel", modelMatrix)
+                habitableZoneProg.setMat4("uViewProj", viewProjMatrix)
+                habitableZoneProg.setFloat("uLogDepthCoef", logDepthCoef)
+                habitableZoneProg.setFloat("uInnerRad", innerAu)
+                habitableZoneProg.setFloat("uOuterRad", outerAu)
+                habitableZoneProg.setFloat("uTime", animTimeSec)
+                annulusMesh.draw()
+            }
+        }
+
+        // Spawn Target Placement Reticle
+        val spPreview = spawnPreviewPos
+        if (spPreview != null) {
+            drawSpawnTargetReticle(spPreview, cameraOrigin, dist, logDepthCoef)
+        }
+
+        // 3D Raymarched Schwarzschild Black Holes (with photon ring, curved top/bottom disk lensing & Doppler beaming)
+        if (blackHoles.isNotEmpty()) {
+            GLES30.glEnable(GLES30.GL_CULL_FACE)
+            GLES30.glCullFace(GLES30.GL_FRONT)
+            GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE_MINUS_SRC_ALPHA)
+
+            val tiltRad = Math.toRadians(14.0)
+            val nxRaw = (sin(tiltRad) * 0.24).toFloat()
+            val nyRaw = cos(tiltRad).toFloat()
+            val nzRaw = 0f
+            val nLen = sqrt(nxRaw * nxRaw + nyRaw * nyRaw + nzRaw * nzRaw).coerceAtLeast(1e-5f)
+            val nx = nxRaw / nLen; val ny = nyRaw / nLen; val nz = nzRaw / nLen
+            val rxRaw = ny; val ryRaw = -nx; val rzRaw = 0f
+            val rLen = sqrt(rxRaw * rxRaw + ryRaw * ryRaw + rzRaw * rzRaw).coerceAtLeast(1e-5f)
+            val ux = rxRaw / rLen; val uy = ryRaw / rLen; val uz = rzRaw / rLen
+            val fx = ny * uz - nz * uy
+            val fy = nz * ux - nx * uz
+            val fz = nx * uy - ny * ux
+
+            for (bh in blackHoles) {
+                val rel = bh.pos - cameraOrigin
+                val rad = bh.getVisualRadiusAu(trueScale).toFloat()
+                val horizonRad = rad * 0.45f
+                val boundRad = rad * 6.5f
+                val diskStrength = (bh.accretionActivity + (bh.absorbedMassSolar * 0.22).toFloat()).coerceIn(0f, 2.5f)
+
+                Matrix.setIdentityM(modelMatrix, 0)
+                Matrix.translateM(modelMatrix, 0, rel.x.toFloat(), rel.y.toFloat(), rel.z.toFloat())
+                Matrix.scaleM(modelMatrix, 0, boundRad, boundRad, boundRad)
+
+                bhRelativisticProg.use()
+                bhRelativisticProg.setMat4("uModel", modelMatrix)
+                bhRelativisticProg.setMat4("uViewProj", viewProjMatrix)
+                bhRelativisticProg.setFloat("uLogDepthCoef", logDepthCoef)
+                bhRelativisticProg.setVec3("uCamPos", eyeX, eyeY, eyeZ)
+                bhRelativisticProg.setVec3("uBhPos", rel.x.toFloat(), rel.y.toFloat(), rel.z.toFloat())
+                bhRelativisticProg.setFloat("uHorizonRadius", horizonRad)
+                bhRelativisticProg.setFloat("uBoundRadius", boundRad)
+                bhRelativisticProg.setFloat("uTime", animTimeSec)
+                bhRelativisticProg.setFloat("uDiskStrength", diskStrength)
+                bhRelativisticProg.setVec3("uDiskNormal", nx, ny, nz)
+                bhRelativisticProg.setVec3("uDiskRight", ux, uy, uz)
+                bhRelativisticProg.setVec3("uDiskForward", fx, fy, fz)
+                sphereLod1.draw()
+            }
+
+            GLES30.glCullFace(GLES30.GL_BACK)
+            GLES30.glDisable(GLES30.GL_CULL_FACE)
+        }
+
+        // Additive Relativistic Polar Jets, Star Coronas, Tidal Filaments & Debris Particles
+        GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE)
+        for (bh in blackHoles) {
+            val diskStrength = (bh.accretionActivity + (bh.absorbedMassSolar * 0.22).toFloat()).coerceIn(0f, 2.5f)
+            if (diskStrength > 0.45f) {
+                val rel = bh.pos - cameraOrigin
+                val rad = bh.getVisualRadiusAu(trueScale).toFloat()
+                val vx = eyeX - rel.x.toFloat()
+                val vz = eyeZ - rel.z.toFloat()
+                val camYawDeg = Math.toDegrees(atan2(vx.toDouble(), vz.toDouble())).toFloat()
+                val jetLen = rad * (5.2f + diskStrength * 3.8f)
+                Matrix.setIdentityM(modelMatrix, 0)
+                Matrix.translateM(modelMatrix, 0, rel.x.toFloat(), rel.y.toFloat(), rel.z.toFloat())
                 modelMatrix[0] = cos(Math.toRadians(camYawDeg.toDouble())).toFloat() * jetLen
                 modelMatrix[2] = -sin(Math.toRadians(camYawDeg.toDouble())).toFloat() * jetLen
                 modelMatrix[5] = jetLen
@@ -587,7 +656,7 @@ class SolarGLRenderer(
                 bhJetProg.setMat4("uViewProj", viewProjMatrix)
                 bhJetProg.setFloat("uLogDepthCoef", logDepthCoef)
                 bhJetProg.setFloat("uTime", animTimeSec)
-                bhJetProg.setFloat("uAccretionActivity", bh.accretionActivity)
+                bhJetProg.setFloat("uAccretionActivity", diskStrength)
                 quadMesh.draw()
             }
         }
@@ -991,9 +1060,53 @@ class SolarGLRenderer(
         return bestId
     }
 
+    private fun drawSpawnTargetReticle(spawnPos: Vec3d, cameraOrigin: Vec3d, camDistAu: Double, logDepthCoef: Float) {
+        val rel = spawnPos - cameraOrigin
+        val reticleRad = (camDistAu * 0.045).coerceIn(0.03, 0.75).toFloat()
+        val segs = 36
+        lineProg.use()
+        lineProg.setMat4("uViewProj", viewProjMatrix)
+        lineProg.setFloat("uLogDepthCoef", logDepthCoef)
+        GLES30.glBindVertexArray(lineVao)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, lineVbo)
+
+        // Outer ring
+        lineBuf.clear()
+        for (i in 0..segs) {
+            val a = (i.toFloat() / segs) * (2f * PI.toFloat())
+            lineBuf.put(rel.x.toFloat() + cos(a) * reticleRad)
+            lineBuf.put(rel.y.toFloat())
+            lineBuf.put(rel.z.toFloat() + sin(a) * reticleRad)
+            lineBuf.put(0.18f); lineBuf.put(0.95f); lineBuf.put(0.85f); lineBuf.put(0.9f)
+        }
+        lineBuf.position(0)
+        GLES30.glBufferSubData(GLES30.GL_ARRAY_BUFFER, 0, (segs + 1) * 7 * 4, lineBuf)
+        GLES30.glLineWidth(3.5f)
+        GLES30.glDrawArrays(GLES30.GL_LINE_STRIP, 0, segs + 1)
+
+        // Crosshair ticks
+        val arm = reticleRad * 1.45f
+        lineBuf.clear()
+        lineBuf.put(rel.x.toFloat() - arm); lineBuf.put(rel.y.toFloat()); lineBuf.put(rel.z.toFloat())
+        lineBuf.put(0.18f); lineBuf.put(0.95f); lineBuf.put(0.85f); lineBuf.put(0.75f)
+        lineBuf.put(rel.x.toFloat() + arm); lineBuf.put(rel.y.toFloat()); lineBuf.put(rel.z.toFloat())
+        lineBuf.put(0.18f); lineBuf.put(0.95f); lineBuf.put(0.85f); lineBuf.put(0.75f)
+        lineBuf.put(rel.x.toFloat()); lineBuf.put(rel.y.toFloat()); lineBuf.put(rel.z.toFloat() - arm)
+        lineBuf.put(0.18f); lineBuf.put(0.95f); lineBuf.put(0.85f); lineBuf.put(0.75f)
+        lineBuf.put(rel.x.toFloat()); lineBuf.put(rel.y.toFloat()); lineBuf.put(rel.z.toFloat() + arm)
+        lineBuf.put(0.18f); lineBuf.put(0.95f); lineBuf.put(0.85f); lineBuf.put(0.75f)
+        lineBuf.position(0)
+        GLES30.glBufferSubData(GLES30.GL_ARRAY_BUFFER, 0, 4 * 7 * 4, lineBuf)
+        GLES30.glLineWidth(2.5f)
+        GLES30.glDrawArrays(GLES30.GL_LINES, 0, 4)
+
+        GLES30.glLineWidth(1.5f)
+        GLES30.glBindVertexArray(0)
+    }
+
     /**
      * Maps a screen coordinate (px, py) onto the orbital XZ plane (Y=0 relative to camera origin)
-     * for slingshot launching and long-press dragging.
+     * for slingshot launching, tap-to-spawn placement, and dragging—including shallow horizon rays.
      */
     fun screenToEclipticWorldPos(screenX: Float, screenY: Float): Vec3d? {
         if (viewportW <= 0 || viewportH <= 0) return null
@@ -1014,10 +1127,27 @@ class SolarGLRenderer(
         val dx = (farW[0] / farW[3]).toDouble() - ox
         val dy = (farW[1] / farW[3]).toDouble() - oy
         val dz = (farW[2] / farW[3]).toDouble() - oz
-        if (abs(dy) < 1e-5) return null
-        val t = -oy / dy
-        if (t <= 0.0) return null
-        return lastCameraOrigin + Vec3d(ox + dx * t, 0.0, oz + dz * t)
+
+        val horiz = hypot(dx, dz).coerceAtLeast(1e-6)
+        if (abs(dy) >= 0.04 * horiz) {
+            val t = -oy / dy
+            if (t > 0.0) {
+                val maxRange = (distanceAu * 8.0).coerceIn(2.0, 220.0)
+                val px = ox + dx * t
+                val pz = oz + dz * t
+                val r = hypot(px, pz)
+                return if (r <= maxRange) {
+                    lastCameraOrigin + Vec3d(px, 0.0, pz)
+                } else {
+                    lastCameraOrigin + Vec3d(px * (maxRange / r), 0.0, pz * (maxRange / r))
+                }
+            }
+        }
+        // Fallback when ray is parallel to ecliptic or pointing above horizon: project forward onto ecliptic disk
+        val dirXz = Vec3d(dx / horiz, 0.0, dz / horiz)
+        val projDist = (distanceAu * 1.15).coerceIn(0.25, 45.0)
+        val eyeXz = Vec3d(lastCamEyeRel[0].toDouble(), 0.0, lastCamEyeRel[2].toDouble())
+        return lastCameraOrigin + eyeXz + dirXz * projDist
     }
 
     private fun setupInstancedAsteroidVao() {

@@ -109,6 +109,19 @@ class PhysicsEngine {
     }
 
     @Synchronized
+    fun updateBodyCoupled(id: Long, scaleRadiusWithMass: Boolean = true, transform: (CelestialBody) -> CelestialBody) {
+        val idx = bodies.indexOfFirst { it.id == id }
+        if (idx < 0) return
+        val original = bodies[idx]
+        val rawEdited = transform(original)
+        val (coupled, eventMsg) = applyCoupledAstrophysics(original, rawEdited, scaleRadiusWithMass)
+        bodies[idx] = coupled
+        if (eventMsg != null) {
+            postEvent(eventMsg)
+        }
+    }
+
+    @Synchronized
     fun removeBody(id: Long) {
         bodies.removeAll { it.id == id }
     }
@@ -282,7 +295,7 @@ class PhysicsEngine {
             val bi = bodies[i]
             val mi = bi.massSolar
             val pix = posX[i]; val piy = posY[i]; val piz = posZ[i]
-            val radI = bi.getVisualRadiusAu(config.trueScaleMode) * 0.35
+            val radI = bi.physicsRadiusAu * 2.0
 
             for (j in i + 1 until n) {
                 val bj = bodies[j]
@@ -292,7 +305,7 @@ class PhysicsEngine {
                 val dx = posX[j] - pix
                 val dy = posY[j] - piy
                 val dz = posZ[j] - piz
-                val radJ = bj.getVisualRadiusAu(config.trueScaleMode) * 0.35
+                val radJ = bj.physicsRadiusAu * 2.0
                 val soft = max(radI + radJ, 1e-5)
                 val r2 = dx * dx + dy * dy + dz * dz + soft * soft
                 val invR = 1.0 / sqrt(r2)
@@ -457,7 +470,8 @@ class PhysicsEngine {
                     stretchedByBhThisStep.add(j)
                     val stretchDir = toBh.normalized()
                     val stress = ((effectiveLimit - dist) / effectiveLimit).toFloat().coerceIn(0f, 1f)
-                    val stretchAmount = (stress * 3.6f).coerceIn(0.08f, 3.8f)
+                    // Smooth Roche elongation capped at 1.85 so geometry stays fluid instead of rigid cigar needles
+                    val stretchAmount = (stress.pow(1.15f) * 1.85f).coerceIn(0.05f, 1.85f)
 
                     // Start accreting mass strongly once inside inner 78% of tidal zone
                     val shredWeight = ((stress - 0.15f) / 0.85f).coerceIn(0f, 1f)
@@ -465,11 +479,15 @@ class PhysicsEngine {
                     val absorbedMass = victim.massSolar * shredFraction
                     val remainingMass = victim.massSolar - absorbedMass
 
+                    val earnedFloor = ((bh.absorbedMassSolar + absorbedMass) * 0.14).toFloat().coerceIn(0f, 0.95f)
                     bh = bh.copy(
                         massSolar = bh.massSolar + absorbedMass,
                         absorbedMassSolar = bh.absorbedMassSolar + absorbedMass,
                         radiusKm = 2.95325 * (bh.massSolar + absorbedMass),
-                        accretionActivity = (bh.accretionActivity + stress * 0.95f * subDt.toFloat() * 12f + shredWeight * 0.08f).coerceAtMost(2.5f)
+                        accretionActivity = max(
+                            earnedFloor,
+                            (bh.accretionActivity + stress * 0.85f * subDt.toFloat() * 10f + shredWeight * 0.08f).coerceAtMost(2.5f)
+                        )
                     )
 
                     // Choose authentic plasma stream color (golden-white for stars, molten orange for planets)
@@ -484,29 +502,30 @@ class PhysicsEngine {
                         Triple(1.0f, 0.56f + stress * 0.25f, 0.22f)
                     }
 
-                    // Build curved spiral tidal stream ribbons connecting the victim to BH's accretion ring!
-                    if (generateFilaments && tidalFilaments.size < 24 && stress > 0.08f) {
+                    // Build curved spiral tidal stream ribbons anchored directly at the L1 facing limb of the victim
+                    if (generateFilaments && tidalFilaments.size < 20 && stress > 0.08f) {
                         val spinUp = Vec3d(0.18, 0.96, 0.18).normalized()
                         val vRel = victim.vel - bh.vel
                         val angMom = (victim.pos - bh.pos).cross(vRel)
                         val orbitNormal = if (angMom.lengthSq() > 1e-8) angMom.normalized() else spinUp
 
-                        for (arm in 0 until 2) {
-                            val pts = ArrayList<Vec3d>(18)
-                            val rStartVec = victim.pos - bh.pos
-                            val startRadius = rStartVec.length().coerceAtLeast(bhRad * 1.35)
-                            val baseAngle = atan2(rStartVec.z, rStartVec.x)
-                            val yStart = rStartVec.y
-                            val armSign = if (arm == 0) 1.0 else -1.0
-                            val targetRingR = bhRad * (1.75 + arm * 0.75)
+                        val l1Tip = victim.pos + stretchDir * (victimVisRad * (0.85 + stretchAmount * 0.45))
+                        val tipFromBh = l1Tip - bh.pos
+                        val startRadius = tipFromBh.length().coerceAtLeast(bhRad * 1.30)
+                        val baseAngle = atan2(tipFromBh.z, tipFromBh.x)
+                        val yStart = tipFromBh.y
 
-                            for (s in 0..17) {
-                                val t = s / 17.0
-                                // Smooth inspiral from victim center/facing tip into a circular orbiting accretion stream
-                                val r = startRadius * (1.0 - t).pow(1.15) + targetRingR * t
-                                val swirlAngle = baseAngle + armSign * (0.06 * arm) + t * (PI * (1.35 + stress * 1.4))
+                        for (arm in 0 until 2) {
+                            val pts = ArrayList<Vec3d>(20)
+                            val armSign = if (arm == 0) 1.0 else -1.0
+                            val targetRingR = bhRad * (1.75 + arm * 0.65)
+
+                            for (s in 0..19) {
+                                val t = s / 19.0
+                                val r = startRadius * (1.0 - t).pow(1.25) + targetRingR * t
+                                val swirlAngle = baseAngle + armSign * (0.04 * arm) + t * (PI * (1.45 + stress * 1.35))
                                 val planeDir = Vec3d(cos(swirlAngle), 0.0, sin(swirlAngle))
-                                val yOff = yStart * (1.0 - t) + sin(t * PI * 2.0) * bhRad * 0.18 * orbitNormal.y
+                                val yOff = yStart * (1.0 - t) + sin(t * PI * 2.0) * bhRad * 0.14 * orbitNormal.y
                                 val point = bh.pos + planeDir * r + Vec3d(0.0, yOff, 0.0)
                                 pts.add(point)
                             }
@@ -520,23 +539,23 @@ class PhysicsEngine {
                         }
                     }
 
-                    // Spawn glowing plasma stream nodes orbiting around BH & feeding disk
-                    if (particles.size < 780 && rng.nextFloat() < (0.55f + stress * 0.45f)) {
+                    // Spawn glowing plasma stream nodes only for substantial stars/planets (no tiny pebble dust spam)
+                    if (victim.massSolar > 1e-8 && particles.size < 680 && rng.nextFloat() < (0.45f + stress * 0.40f)) {
                         val radial = -stretchDir
                         val tangent = radial.cross(Vec3d(0.0, 1.0, 0.0)).let {
                             if (it.lengthSq() < 1e-6) Vec3d(1.0, 0.0, 0.0) else it.normalized()
                         }
-                        val spawnPt = victim.pos + stretchDir * (victimVisRad * (0.6 + rng.nextDouble() * 0.8))
+                        val spawnPt = victim.pos + stretchDir * (victimVisRad * (0.8 + rng.nextDouble() * 0.6))
                         val orbitalSpeed = sqrt(AstroConstants.G_AU * bh.massSolar / max(dist, bhRad)).coerceIn(1.5, 16.0)
-                        val streamVel = bh.vel + tangent * (orbitalSpeed * 0.85) + stretchDir * (orbitalSpeed * 0.42)
+                        val streamVel = bh.vel + tangent * (orbitalSpeed * 0.88) + stretchDir * (orbitalSpeed * 0.35)
                         particles.add(
                             DebrisParticle(
-                                x = spawnPt.x + (rng.nextDouble() - 0.5) * bhRad * 0.25,
-                                y = spawnPt.y + (rng.nextDouble() - 0.5) * bhRad * 0.12,
-                                z = spawnPt.z + (rng.nextDouble() - 0.5) * bhRad * 0.25,
+                                x = spawnPt.x + (rng.nextDouble() - 0.5) * bhRad * 0.18,
+                                y = spawnPt.y + (rng.nextDouble() - 0.5) * bhRad * 0.10,
+                                z = spawnPt.z + (rng.nextDouble() - 0.5) * bhRad * 0.18,
                                 vx = streamVel.x, vy = streamVel.y, vz = streamVel.z,
-                                life = 0f, maxLife = 1.8f + rng.nextFloat() * 1.4f,
-                                size = 1.6f + stress * 2.4f,
+                                life = 0f, maxLife = 1.6f + rng.nextFloat() * 1.2f,
+                                size = 1.4f + stress * 2.0f,
                                 r = streamColor.first.coerceIn(0f, 1f),
                                 g = streamColor.second.coerceIn(0f, 1f),
                                 b = streamColor.third.coerceIn(0f, 1f),
@@ -546,15 +565,15 @@ class PhysicsEngine {
                     }
 
                     // Relativistic polar jet particles when accretion is high
-                    if (bh.accretionActivity > 0.55f && particles.size < 780 && rng.nextFloat() < 0.42f) {
+                    if (bh.accretionActivity > 0.65f && particles.size < 680 && rng.nextFloat() < 0.32f) {
                         val sign = if (rng.nextBoolean()) 1.0 else -1.0
                         particles.add(
                             DebrisParticle(
                                 x = bh.pos.x, y = bh.pos.y + sign * bhRad * 0.45, z = bh.pos.z,
-                                vx = (rng.nextDouble() - 0.5) * 0.4,
+                                vx = (rng.nextDouble() - 0.5) * 0.35,
                                 vy = sign * (9.0 + rng.nextDouble() * 7.0),
-                                vz = (rng.nextDouble() - 0.5) * 0.4,
-                                life = 0f, maxLife = 1.2f, size = 2.0f,
+                                vz = (rng.nextDouble() - 0.5) * 0.35,
+                                life = 0f, maxLife = 1.1f, size = 1.8f,
                                 r = 0.55f, g = 0.85f, b = 1.0f
                             )
                         )
@@ -680,27 +699,32 @@ class PhysicsEngine {
 
                         removed[otherSlot] = true
                         val isMerger = otherBody.type == BodyType.BLACK_HOLE
+                        val gainActivity = if (isMerger) 1.25f else (0.35f + (otherBody.massSolar / bhBody.massSolar.coerceAtLeast(0.1)).toFloat() * 0.8f).coerceIn(0.25f, 1.4f)
                         val updated = bhBody.copy(
                             massSolar = totalMass,
                             absorbedMassSolar = bhBody.absorbedMassSolar + otherBody.massSolar,
                             radiusKm = 2.95325 * totalMass,
                             vel = comVel,
-                            accretionActivity = (bhBody.accretionActivity + 1.25f).coerceAtMost(2.5f)
+                            accretionActivity = (bhBody.accretionActivity + gainActivity).coerceAtMost(2.5f)
                         )
                         bodies[bhSlot] = updated
                         if (bhIsI) bi = updated
-                        shockwaves.add(
-                            ShockwaveEvent(
-                                id = nextEntityId++,
-                                pos = bhBody.pos,
-                                maxRadiusAu = if (isMerger) 3.5 else 1.4,
-                                ageSec = 0f,
-                                durationSec = if (isMerger) 3.0f else 1.6f,
-                                color = if (isMerger) Triple(0.70f, 0.45f, 1.0f) else Triple(1.0f, 0.72f, 0.35f),
-                                isGravitationalWave = isMerger
+                        if (isMerger || otherBody.massSolar >= 0.05) {
+                            shockwaves.add(
+                                ShockwaveEvent(
+                                    id = nextEntityId++,
+                                    pos = bhBody.pos,
+                                    maxRadiusAu = if (isMerger) 3.5 else 1.4,
+                                    ageSec = 0f,
+                                    durationSec = if (isMerger) 3.0f else 1.4f,
+                                    color = if (isMerger) Triple(0.70f, 0.45f, 1.0f) else Triple(1.0f, 0.72f, 0.35f),
+                                    isGravitationalWave = isMerger
+                                )
                             )
-                        )
-                        spawnBurst(bhBody.pos, if (isMerger) 60 else 40, Triple(1.0f, 0.65f, 0.3f), 3.2)
+                        }
+                        if (isMerger) {
+                            spawnBurst(bhBody.pos, 50, Triple(0.75f, 0.55f, 1.0f), 3.0)
+                        }
                         postEvent(if (isMerger) "Black Hole Merger! Gravitational Waves Emitted" else "${bhBody.name} absorbed ${otherBody.name}")
                         continue
                     }
@@ -709,22 +733,35 @@ class PhysicsEngine {
                     val reducedMass = (primary.massSolar * secondary.massSolar) / totalMass
                     val kineticEnergy = 0.5 * reducedMass * relSpeed * relSpeed
                     val bindingEnergy = AstroConstants.G_AU * primary.massSolar * secondary.massSolar / max(ri + rj, 1e-6)
+                    val primaryIsFluidOrStar = primary.type.isLuminous || primary.type == BodyType.GAS_GIANT || primary.type == BodyType.ICE_GIANT
+                    val isTinyImpactor = secondary.massSolar < primary.massSolar * 0.05
                     val isCatastrophic = kineticEnergy > bindingEnergy * 2.2 && secondary.massSolar > primary.massSolar * 0.08 && !primary.type.isLuminous
 
-                    // Impact normal in local planet space for crater placement
+                    // Only solid terrestrial/rocky bodies retain impact craters!
                     val impactDir = (secondary.pos - primary.pos).normalized()
-                    val craterRadius = (0.18f + (secondary.radiusKm / primary.radiusKm).toFloat() * 0.45f).coerceIn(0.10f, 0.55f)
-                    val newCrater = CraterMark(
-                        nx = impactDir.x.toFloat(),
-                        ny = impactDir.y.toFloat(),
-                        nz = impactDir.z.toFloat(),
-                        radiusRad = craterRadius,
-                        heat = 1.0f
-                    )
-                    val updatedCraters = (primary.craters + newCrater).takeLast(8)
+                    val updatedCraters = if (!primaryIsFluidOrStar) {
+                        val craterRadius = (0.18f + (secondary.radiusKm / primary.radiusKm).toFloat() * 0.45f).coerceIn(0.10f, 0.55f)
+                        val newCrater = CraterMark(
+                            nx = impactDir.x.toFloat(),
+                            ny = impactDir.y.toFloat(),
+                            nz = impactDir.z.toFloat(),
+                            radiusRad = craterRadius,
+                            heat = 1.0f
+                        )
+                        (primary.craters + newCrater).takeLast(8)
+                    } else primary.craters
 
-                    val heatBump = (0.45f + (secondary.massSolar / primary.massSolar).toFloat() * 2.5f).coerceIn(0.35f, 1.0f)
-                    val newTemp = (primary.temperatureK + 1800.0 * heatBump).coerceAtMost(8500.0)
+                    val massRatio = (secondary.massSolar / primary.massSolar).toFloat()
+                    val heatBump = if (primaryIsFluidOrStar && isTinyImpactor) {
+                        0.0f
+                    } else {
+                        (0.35f + massRatio * 2.5f).coerceIn(0.25f, 1.0f)
+                    }
+                    val newTemp = if (primaryIsFluidOrStar && isTinyImpactor) {
+                        primary.temperatureK
+                    } else {
+                        (primary.temperatureK + 1800.0 * heatBump).coerceAtMost(12000.0)
+                    }
                     val newRadiusKm = primary.radiusKm * cbrt(totalMass / primary.massSolar)
 
                     removed[secondaryIdx] = true
@@ -733,24 +770,30 @@ class PhysicsEngine {
                         radiusKm = if (isCatastrophic) primary.radiusKm * 0.94 else newRadiusKm,
                         vel = comVel,
                         temperatureK = newTemp,
-                        crustHeat = (primary.crustHeat + heatBump).coerceAtMost(1.0f),
+                        crustHeat = if (primaryIsFluidOrStar) primary.crustHeat else (primary.crustHeat + heatBump).coerceAtMost(1.0f),
                         craters = updatedCraters
                     )
                     bodies[primaryIdx] = mergedPrimary
                     if (primaryIsI) bi = mergedPrimary
 
                     val impactPos = primary.pos + impactDir * primary.getVisualRadiusAu(config.trueScaleMode)
-                    spawnBurst(impactPos, if (isCatastrophic) 75 else 35, Triple(1.0f, 0.48f, 0.15f), relSpeed * 0.45 + 0.8)
-                    shockwaves.add(
-                        ShockwaveEvent(
-                            id = nextEntityId++,
-                            pos = impactPos,
-                            maxRadiusAu = (ri + rj) * (if (isCatastrophic) 8.0 else 4.0),
-                            ageSec = 0f,
-                            durationSec = 1.4f,
-                            color = Triple(1.0f, 0.52f, 0.18f)
+
+                    // Suppress useless rocky explosion/debris particles when tiny impactors vaporize in stars or gas/ice giants!
+                    val shouldEmitParticles = !(primaryIsFluidOrStar && isTinyImpactor)
+                    if (shouldEmitParticles) {
+                        val burstColor = if (primary.type.isLuminous) primary.albedoColor else Triple(1.0f, 0.48f, 0.15f)
+                        spawnBurst(impactPos, if (isCatastrophic) 70 else 28, burstColor, relSpeed * 0.40 + 0.7)
+                        shockwaves.add(
+                            ShockwaveEvent(
+                                id = nextEntityId++,
+                                pos = impactPos,
+                                maxRadiusAu = (ri + rj) * (if (isCatastrophic) 8.0 else 3.8),
+                                ageSec = 0f,
+                                durationSec = 1.3f,
+                                color = burstColor
+                            )
                         )
-                    )
+                    }
 
                     if (isCatastrophic && bodies.size + newlySpawned.size < 280) {
                         val fragCount = 4
@@ -780,7 +823,7 @@ class PhysicsEngine {
                             )
                         }
                         postEvent("Catastrophic impact: ${secondary.name} shattered against ${primary.name}!")
-                    } else if (!primary.isBackgroundCluster && !secondary.isBackgroundCluster) {
+                    } else if (!primary.isBackgroundCluster && !secondary.isBackgroundCluster && (!primaryIsFluidOrStar || !isTinyImpactor)) {
                         postEvent("${secondary.name} impacted ${primary.name}")
                     }
                 }
@@ -819,7 +862,7 @@ class PhysicsEngine {
                 b.craters.map { it.copy(heat = (it.heat - coolRate * 0.8f).coerceAtLeast(0f)) }
             } else b.craters
 
-            // Radiative equilibrium temperature from active stars (only for non-luminous bodies)
+            // Radiative equilibrium temperature from active stars + atmospheric greenhouse warming
             var eqTemp = b.temperatureK
             if (!b.type.isLuminous && b.type != BodyType.BLACK_HOLE && stars.isNotEmpty()) {
                 var fluxSum = 0.0
@@ -827,14 +870,16 @@ class PhysicsEngine {
                     val d2 = (b.pos - s.pos).lengthSq().coerceAtLeast(1e-4)
                     fluxSum += s.luminositySolar / d2
                 }
-                val targetEq = (278.0 * fluxSum.pow(0.25)).coerceIn(30.0, 4500.0)
+                val greenhouse = 1.0 + b.atmosphereDensity.toDouble().coerceAtLeast(0.0) * 0.22
+                val targetEq = (278.0 * greenhouse * fluxSum.pow(0.25)).coerceIn(30.0, 5200.0)
                 val targetWithLava = targetEq + newCrustHeat * 1800.0
                 eqTemp = b.temperatureK + (targetWithLava - b.temperatureK) * (realDtSec * 0.45).coerceIn(0.0, 0.25)
             }
 
-            // Decay accretion activity gently when nothing is falling in
+            // Retain persistent accretion disk proportional to absorbed matter; freshly spawned isolated BH stays disk-free at 0f
             val newAccretion = if (b.type == BodyType.BLACK_HOLE) {
-                (b.accretionActivity - 0.12f * realDtSec.toFloat()).coerceAtLeast(0.25f)
+                val earnedFloor = (b.absorbedMassSolar * 0.14).toFloat().coerceIn(0f, 0.95f)
+                (b.accretionActivity - 0.06f * realDtSec.toFloat()).coerceAtLeast(earnedFloor)
             } else 0f
 
             // Record orbit trail point if moved meaningfully
@@ -1286,6 +1331,232 @@ class PhysicsEngine {
             p.x += p.vx * dtSec
             p.y += p.vy * dtSec
             p.z += p.vz * dtSec
+        }
+    }
+
+    companion object {
+        fun spectralClassForTemp(tempK: Double): SpectralClass = when {
+            tempK >= 25000.0 -> SpectralClass.O
+            tempK >= 10000.0 -> SpectralClass.B
+            tempK >= 7500.0 -> SpectralClass.A
+            tempK >= 6000.0 -> SpectralClass.F
+            tempK >= 5200.0 -> SpectralClass.G
+            tempK >= 3700.0 -> SpectralClass.K
+            else -> SpectralClass.M
+        }
+
+        /**
+         * Couples live property edits to real astrophysical scaling laws and phase transitions:
+         * - Star Mass <-> Luminosity (M^3.5), Radius (M^0.8), Temperature (Stefan-Boltzmann), Spectral Class, & Red Giant / BH collapse
+         * - White Dwarf (>1.44 M_sun Chandrasekhar) -> Neutron Star; Neutron Star (>2.8 M_sun TOV) -> Black Hole
+         * - Planet Mass (>15 M_earth -> Gas Giant; >0.08 M_sun -> M-Dwarf Star ignition)
+         * - Atmosphere <-> Greenhouse temperature boost; Temperature <-> Magma crust / Ice freeze states
+         */
+        fun applyCoupledAstrophysics(
+            original: CelestialBody,
+            edited: CelestialBody,
+            scaleRadiusWithMass: Boolean = true
+        ): Pair<CelestialBody, String?> {
+            if (original.type == BodyType.BLACK_HOLE) {
+                val m = edited.massSolar.coerceAtLeast(0.05)
+                return edited.copy(
+                    massSolar = m,
+                    radiusKm = 2.95325 * m,
+                    temperatureK = 0.0,
+                    luminositySolar = 0.0
+                ) to null
+            }
+
+            val massChanged = abs(edited.massSolar - original.massSolar) > max(1e-18, original.massSolar * 1e-4)
+            val radiusChanged = abs(edited.radiusKm - original.radiusKm) > max(1e-3, original.radiusKm * 1e-4)
+            val tempChanged = abs(edited.temperatureK - original.temperatureK) > 0.5
+            val lumChanged = abs(edited.luminositySolar - original.luminositySolar) > max(1e-5, original.luminositySolar * 1e-4)
+            val atmoChanged = abs(edited.atmosphereDensity - original.atmosphereDensity) > 0.005f
+
+            if (original.type.isLuminous) {
+                val m = edited.massSolar.coerceAtLeast(0.08)
+
+                // Compact remnant & hypermassive collapse thresholds
+                if (original.type == BodyType.WHITE_DWARF && m > 1.44) {
+                    return edited.copy(
+                        type = BodyType.NEUTRON_STAR,
+                        spectralClass = SpectralClass.NONE,
+                        massSolar = m,
+                        radiusKm = 12.0,
+                        temperatureK = 180_000.0,
+                        luminositySolar = 0.5,
+                        albedoColor = Triple(0.62f, 0.85f, 1.0f),
+                        evolutionStage = EvolutionStage.NEUTRON_STAR
+                    ) to "${original.name} crossed Chandrasekhar limit (1.44 M☉) → Neutron Star!"
+                }
+                if (original.type == BodyType.NEUTRON_STAR && m > 2.8) {
+                    return edited.copy(
+                        type = BodyType.BLACK_HOLE,
+                        spectralClass = SpectralClass.NONE,
+                        massSolar = m,
+                        radiusKm = 2.95325 * m,
+                        temperatureK = 0.0,
+                        luminositySolar = 0.0,
+                        accretionActivity = 0.45f,
+                        evolutionStage = EvolutionStage.BLACK_HOLE
+                    ) to "${original.name} crossed TOV limit (2.8 M☉) → Black Hole!"
+                }
+                if ((original.type == BodyType.STAR || original.type == BodyType.RED_GIANT) && m >= 120.0) {
+                    return edited.copy(
+                        type = BodyType.BLACK_HOLE,
+                        spectralClass = SpectralClass.NONE,
+                        massSolar = m,
+                        radiusKm = 2.95325 * m,
+                        temperatureK = 0.0,
+                        luminositySolar = 0.0,
+                        accretionActivity = 0.55f,
+                        evolutionStage = EvolutionStage.BLACK_HOLE
+                    ) to "${original.name} exceeded Eddington mass (120 M☉) → Black Hole!"
+                }
+
+                // Main Sequence / Red Giant coupled scaling
+                if (massChanged && (original.type == BodyType.STAR || original.type == BodyType.RED_GIANT)) {
+                    val newLum = if (original.type == BodyType.RED_GIANT) {
+                        (m.pow(3.5) * 35.0).coerceIn(10.0, 2_500_000.0)
+                    } else {
+                        m.pow(3.5).coerceIn(1e-4, 2_000_000.0)
+                    }
+                    val newRadKm = if (scaleRadiusWithMass) {
+                        val baseRad = 696_340.0 * m.pow(0.8)
+                        if (original.type == BodyType.RED_GIANT) (baseRad * 12.0).coerceAtLeast(3_500_000.0)
+                        else baseRad.coerceIn(30_000.0, 45_000_000.0)
+                    } else edited.radiusKm
+                    val rSolar = (newRadKm / 696_340.0).coerceAtLeast(0.05)
+                    val rawTemp = 5778.0 * (newLum / (rSolar * rSolar)).pow(0.25)
+                    val newTemp = rawTemp.coerceIn(2400.0, 52000.0)
+                    val spec = spectralClassForTemp(newTemp)
+                    val msg = if (spec != original.spectralClass) "${original.name} is now ${spec.label} (${newTemp.toInt()} K)" else null
+                    return edited.copy(
+                        massSolar = m,
+                        radiusKm = newRadKm,
+                        luminositySolar = newLum,
+                        temperatureK = newTemp,
+                        spectralClass = spec,
+                        albedoColor = kelvinToRgb(newTemp),
+                        initialMassSolar = max(original.initialMassSolar, m)
+                    ) to msg
+                }
+
+                if (lumChanged) {
+                    val newLum = edited.luminositySolar.coerceIn(1e-4, 5_000_000.0)
+                    val rSolar0 = (edited.radiusKm / 696_340.0).coerceAtLeast(0.01)
+                    val ratio = (newLum / original.luminositySolar.coerceAtLeast(1e-4)).coerceIn(1e-4, 1e6)
+                    val newTemp = (original.temperatureK * ratio.pow(0.18)).coerceIn(2400.0, 52000.0)
+                    val newRadKm = (edited.radiusKm * ratio.pow(0.14)).coerceIn(7000.0, 60_000_000.0)
+                    val becomeGiant = original.type == BodyType.STAR && newRadKm > 3_500_000.0 && newTemp < 4200.0
+                    val spec = spectralClassForTemp(newTemp)
+                    return edited.copy(
+                        type = if (becomeGiant) BodyType.RED_GIANT else edited.type,
+                        luminositySolar = newLum,
+                        temperatureK = newTemp,
+                        radiusKm = newRadKm,
+                        spectralClass = spec,
+                        albedoColor = kelvinToRgb(newTemp)
+                    ) to (if (becomeGiant) "${original.name} puffed into a Red Giant!" else null)
+                }
+
+                if (tempChanged) {
+                    val newTemp = edited.temperatureK.coerceIn(1800.0, 250_000.0)
+                    val rSolar = (edited.radiusKm / 696_340.0).coerceAtLeast(1e-4)
+                    val newLum = (rSolar * rSolar * (newTemp / 5778.0).pow(4.0)).coerceIn(1e-5, 5_000_000.0)
+                    val spec = if (edited.type == BodyType.STAR || edited.type == BodyType.RED_GIANT) spectralClassForTemp(newTemp) else edited.spectralClass
+                    return edited.copy(
+                        temperatureK = newTemp,
+                        luminositySolar = newLum,
+                        spectralClass = spec,
+                        albedoColor = kelvinToRgb(newTemp)
+                    ) to null
+                }
+
+                if (radiusChanged) {
+                    val newRadKm = edited.radiusKm.coerceAtLeast(5.0)
+                    val becomeGiant = original.type == BodyType.STAR && newRadKm > 3_200_000.0 && original.massSolar < 8.0
+                    val rSolar = (newRadKm / 696_340.0).coerceAtLeast(1e-4)
+                    val newTemp = if (becomeGiant) 3400.0 else edited.temperatureK
+                    val newLum = (rSolar * rSolar * (newTemp / 5778.0).pow(4.0)).coerceIn(1e-5, 5_000_000.0)
+                    return edited.copy(
+                        type = if (becomeGiant) BodyType.RED_GIANT else edited.type,
+                        radiusKm = newRadKm,
+                        temperatureK = newTemp,
+                        luminositySolar = newLum,
+                        albedoColor = kelvinToRgb(newTemp),
+                        evolutionStage = if (becomeGiant) EvolutionStage.RED_GIANT else edited.evolutionStage
+                    ) to (if (becomeGiant) "${original.name} expanded into a Red Giant!" else null)
+                }
+
+                return edited to null
+            }
+
+            // Non-luminous bodies (Planets, Moons, Dwarf Planets, Asteroids)
+            if (massChanged) {
+                val m = edited.massSolar.coerceAtLeast(1e-16)
+                // Brown dwarf -> Red Dwarf hydrogen ignition threshold at 0.08 M_sun!
+                if (m >= 0.08) {
+                    val newLum = m.pow(3.5).coerceAtLeast(0.005)
+                    val newRadKm = 696_340.0 * m.pow(0.8)
+                    return edited.copy(
+                        type = BodyType.STAR,
+                        spectralClass = SpectralClass.M,
+                        massSolar = m,
+                        radiusKm = newRadKm,
+                        temperatureK = 3100.0,
+                        luminositySolar = newLum,
+                        albedoColor = kelvinToRgb(3100.0),
+                        crustHeat = 0f,
+                        atmosphereDensity = 0f,
+                        hasClouds = false,
+                        hasCityLights = false,
+                        evolutionStage = EvolutionStage.MAIN_SEQUENCE
+                    ) to "${original.name} ignited hydrogen fusion → Red Dwarf Star!"
+                }
+
+                val isRocky = original.type == BodyType.TERRESTRIAL_PLANET ||
+                    original.type == BodyType.EARTH_LIKE ||
+                    original.type == BodyType.DWARF_PLANET ||
+                    original.type == BodyType.MOON ||
+                    original.type == BodyType.ASTEROID
+
+                val newRadKm = if (scaleRadiusWithMass && !radiusChanged) {
+                    (original.radiusKm * cbrt((m / original.massSolar.coerceAtLeast(1e-16)).coerceIn(1e-6, 1e6))).coerceIn(10.0, 220_000.0)
+                } else edited.radiusKm
+
+                if (isRocky && m > 15.0 * AstroConstants.EARTH_MASS_SOLAR) {
+                    return edited.copy(
+                        type = BodyType.GAS_GIANT,
+                        archetype = BodyArchetype.GENERIC_GAS,
+                        massSolar = m,
+                        radiusKm = max(newRadKm, 46_000.0),
+                        atmosphereDensity = max(edited.atmosphereDensity, 0.55f),
+                        albedoColor = Triple(0.82f, 0.66f, 0.48f),
+                        hasCityLights = false
+                    ) to "${original.name} grew past 15 M⊕ and accreted H/He → Gas Giant!"
+                }
+
+                return edited.copy(massSolar = m, radiusKm = newRadKm) to null
+            }
+
+            if (atmoChanged && !tempChanged) {
+                val deltaAtmo = edited.atmosphereDensity - original.atmosphereDensity
+                val newTemp = (edited.temperatureK + deltaAtmo * 95.0).coerceIn(25.0, 5000.0)
+                return edited.copy(temperatureK = newTemp) to null
+            }
+
+            if (tempChanged) {
+                val t = edited.temperatureK.coerceAtLeast(1.0)
+                val nextCrustHeat = if (t > 1050.0) {
+                    ((t - 1050.0) / 2400.0).toFloat().coerceIn(0f, 1f)
+                } else {
+                    0f
+                }
+                return edited.copy(temperatureK = t, crustHeat = nextCrustHeat) to null
+            }
+
+            return edited to null
         }
     }
 }

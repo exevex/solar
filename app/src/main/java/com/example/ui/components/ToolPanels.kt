@@ -1,6 +1,7 @@
 package com.example.ui.components
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -20,7 +21,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -36,6 +39,7 @@ fun SpawnDrawer(
     uiState: SandboxUiState,
     onSelectCategory: (SpawnCategory) -> Unit,
     onSelectTemplate: (SpawnTemplate) -> Unit,
+    onToggleSpawnStationary: () -> Unit,
     onSpawnQuickOrbit: () -> Unit,
     onTogglePause: () -> Unit,
     onClose: () -> Unit,
@@ -80,11 +84,23 @@ fun SpawnDrawer(
                     }
                 }
 
-                Text(
-                    text = "Tap space to place",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = TextSecondary
-                )
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (uiState.spawnStationary) AmberWarm.copy(alpha = 0.18f) else CyanTelemetry.copy(alpha = 0.14f),
+                    border = BorderStroke(1.dp, if (uiState.spawnStationary) AmberWarm else CyanTelemetry.copy(alpha = 0.65f)),
+                    modifier = Modifier
+                        .heightIn(min = 38.dp)
+                        .clickable { onToggleSpawnStationary() }
+                        .testTag("spawn_velocity_mode_btn")
+                ) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                        Text(
+                            text = if (uiState.spawnStationary) "Drop Still" else "Circular Orbit",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (uiState.spawnStationary) AmberWarm else CyanTelemetry
+                        )
+                    }
+                }
 
                 Button(
                     onClick = onSpawnQuickOrbit,
@@ -94,7 +110,7 @@ fun SpawnDrawer(
                 ) {
                     Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text("Orbit Spawn", style = MaterialTheme.typography.labelMedium)
+                    Text("Quick Place", style = MaterialTheme.typography.labelMedium)
                 }
 
                 IconButton(onClick = onTogglePause, modifier = Modifier.size(36.dp).testTag("spawn_play_pause_btn")) {
@@ -395,6 +411,9 @@ fun InspectorPanel(
                     TelemetryRow("Escape Velocity", String.format("%.2f km/s", telemetry.escapeVelocityKmS))
                     TelemetryRow("Temperature", formatTemperatureK(b.temperatureK))
                     TelemetryRow("Density", String.format("%.2f g/cm³", telemetry.densityGCm3))
+                    if (b.type.isLuminous && b.spectralClass != SpectralClass.NONE) {
+                        TelemetryRow("Spectral / Luminosity", "${b.spectralClass.label} • ${formatCompactDouble(b.luminositySolar)} L☉")
+                    }
                     if (telemetry.orbitalPeriodDays != null && telemetry.semiMajorAxisAu != null) {
                         TelemetryRow("Orbit Period", String.format("%.1f days", telemetry.orbitalPeriodDays))
                         TelemetryRow("Semi-Major / Ecc", String.format("%.3f AU • e=%.3f", telemetry.semiMajorAxisAu, telemetry.eccentricity ?: 0.0))
@@ -406,6 +425,14 @@ fun InspectorPanel(
                         }
                     }
                 }
+            }
+
+            if (b.archetype == BodyArchetype.EARTH || b.type == BodyType.EARTH_LIKE) {
+                EarthMapPreviewCard(
+                    earthBody = b,
+                    onClose = null,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
 
             Row(
@@ -574,6 +601,109 @@ fun InspectorPanel(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun EarthMapPreviewCard(
+    earthBody: CelestialBody?,
+    onClose: (() -> Unit)?,
+    modifier: Modifier = Modifier
+) {
+    GlassHudSurface(
+        modifier = modifier.testTag("earth_map_preview_card"),
+        borderColor = EmeraldOrbit.copy(alpha = 0.65f)
+    ) {
+        if (earthBody == null) {
+            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Earth Surface Map", style = MaterialTheme.typography.titleSmall, color = EmeraldOrbit)
+                    if (onClose != null) {
+                        IconButton(onClick = onClose, modifier = Modifier.size(30.dp)) {
+                            Icon(Icons.Default.Close, contentDescription = stringResource(R.string.cd_close_panel), tint = TextSecondary)
+                        }
+                    }
+                }
+                Text(
+                    "No Earth-like world active in system. Load Solar System or spawn an Oceanic Terra planet.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary
+                )
+            }
+            return@GlassHudSurface
+        }
+
+        val tempBucket = (earthBody.temperatureK / 2.0).toInt()
+        val atmoBucket = (earthBody.atmosphereDensity * 100f).toInt()
+        val heatBucket = (earthBody.crustHeat * 25f).toInt()
+        val tidalBucket = (earthBody.tidalStress * 25f).toInt()
+        val craterCount = earthBody.craters.size
+
+        val (bmp, metrics) = remember(earthBody.id, tempBucket, atmoBucket, heatBucket, tidalBucket, craterCount) {
+            EarthGeography.renderLiveEarthMap(earthBody, width = 256, height = 128)
+        }
+        val imageBitmap = remember(bmp) { bmp.asImageBitmap() }
+
+        val climateAccent = when {
+            metrics.moltenPct > 5 -> DangerNova
+            metrics.habitabilityPct >= 60 -> EmeraldOrbit
+            metrics.iceCoverPct > 45 -> CyanTelemetry
+            else -> AmberWarm
+        }
+
+        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("${earthBody.name} Surface Map", style = MaterialTheme.typography.labelLarge, color = TextPrimary)
+                    Text(metrics.climateLabel, style = MaterialTheme.typography.labelSmall, color = climateAccent)
+                }
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = climateAccent.copy(alpha = 0.18f),
+                    border = BorderStroke(1.dp, climateAccent.copy(alpha = 0.65f))
+                ) {
+                    Text(
+                        text = "${metrics.habitabilityPct}% Hab",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = climateAccent,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+                if (onClose != null) {
+                    IconButton(onClick = onClose, modifier = Modifier.size(30.dp)) {
+                        Icon(Icons.Default.Close, contentDescription = stringResource(R.string.cd_close_panel), tint = TextSecondary)
+                    }
+                }
+            }
+
+            Image(
+                bitmap = imageBitmap,
+                contentDescription = "${earthBody.name} equirectangular terrain preview map",
+                contentScale = ContentScale.FillWidth,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(2.0f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .border(1.dp, HairlineBorder, RoundedCornerShape(8.dp))
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text("Ocean ${metrics.liquidOceanPct}%", style = MaterialTheme.typography.labelSmall, color = CyanTelemetry)
+                Text("Ice ${metrics.iceCoverPct}%", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+                Text("Magma ${metrics.moltenPct}%", style = MaterialTheme.typography.labelSmall, color = if (metrics.moltenPct > 0) DangerNova else TextDim)
             }
         }
     }
