@@ -499,7 +499,7 @@ object SolarSystemPresets {
                 CelestialBody(
                     id = bhId, name = "$namePrefix Core SMBH", type = BodyType.BLACK_HOLE,
                     pos = centerPos, vel = bulkVel, massSolar = smbhMass, radiusKm = 2.95 * smbhMass,
-                    temperatureK = 0.0, accretionActivity = 0.85f, seed = rng.nextFloat() * 100f
+                    temperatureK = 0.0, accretionActivity = 0.0f, seed = rng.nextFloat() * 100f
                 )
             )
             val cosT = cos(Math.toRadians(tiltXDeg))
@@ -572,14 +572,14 @@ object SolarSystemPresets {
             CelestialBody(
                 id = allocateId(), name = "Cygnus BH-Alpha", type = BodyType.BLACK_HOLE,
                 pos = p1, vel = v1, massSolar = m1, radiusKm = 2.95 * m1,
-                temperatureK = 0.0, accretionActivity = 1.0f, seed = 1.0f
+                temperatureK = 0.0, accretionActivity = 0.0f, seed = 1.0f
             )
         )
         bodies.add(
             CelestialBody(
                 id = allocateId(), name = "Cygnus BH-Beta", type = BodyType.BLACK_HOLE,
                 pos = p2, vel = v2, massSolar = m2, radiusKm = 2.95 * m2,
-                temperatureK = 0.0, accretionActivity = 0.9f, seed = 2.0f
+                temperatureK = 0.0, accretionActivity = 0.0f, seed = 2.0f
             )
         )
 

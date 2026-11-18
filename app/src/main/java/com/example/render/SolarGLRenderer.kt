@@ -46,6 +46,10 @@ class SolarGLRenderer(
     @Volatile var graphicsSettings: GraphicsSettings = GraphicsSettings()
     @Volatile var slingshotPreview: SlingshotPreview? = null
     @Volatile var spawnPreviewPos: Vec3d? = null
+    @Volatile var spawnPreviewRadiusAu: Float = 0.025f
+    @Volatile var spawnPreviewTrajectory: List<Vec3d> = emptyList()
+
+    private var cinematicLookAtWorld: Vec3d? = null
 
     private var viewportW = 1280
     private var viewportH = 720
@@ -288,14 +292,32 @@ class SolarGLRenderer(
         val trueScale = frame.config.trueScaleMode
         val quality = graphicsSettings.tier
 
-        if (cinematicMode) {
-            yawDeg = (yawDeg + dtSec * 11f) % 360f
-            pitchDeg = 18f + 10f * sin(animTimeSec * 0.35f)
+        val cinState = frame.cinematicState
+        if (cinState.isActive && cinState.cameraGoal != null) {
+            val goal = cinState.cameraGoal
+            val lerpRate = (dtSec * 4.5f).coerceIn(0.02f, 0.35f)
+            // Shortest-angle yaw interpolation
+            var dy = ((goal.yawDeg - yawDeg + 540f) % 360f) - 180f
+            yawDeg = (yawDeg + dy * lerpRate + 360f) % 360f
+            pitchDeg = pitchDeg + (goal.pitchDeg - pitchDeg) * lerpRate
+            distanceAu = distanceAu + (goal.distanceAu - distanceAu) * lerpRate.toDouble()
+            val curLook = cinematicLookAtWorld ?: goal.lookAtPos
+            cinematicLookAtWorld = curLook + (goal.lookAtPos - curLook) * lerpRate.toDouble()
+        } else {
+            cinematicLookAtWorld = null
+            if (cinematicMode) {
+                yawDeg = (yawDeg + dtSec * 11f) % 360f
+                pitchDeg = 18f + 10f * sin(animTimeSec * 0.35f)
+            }
         }
 
-        // Floating origin: subtract focused body position in 64-bit Double before OpenGL Float matrices
+        // Floating origin: subtract active look-at or focused body position in 64-bit Double before OpenGL Float matrices
         val focusBody = focusedBodyId?.let { id -> bodies.firstOrNull { it.id == id } }
-        val cameraOrigin = (focusBody?.pos ?: Vec3d.ZERO) + manualPanOffset
+        val cameraOrigin = if (cinState.isActive && cinematicLookAtWorld != null) {
+            cinematicLookAtWorld!!
+        } else {
+            (focusBody?.pos ?: Vec3d.ZERO) + manualPanOffset
+        }
         lastCameraOrigin = cameraOrigin
         lastBodiesForPick = bodies
         lastTrueScale = trueScale
@@ -344,8 +366,8 @@ class SolarGLRenderer(
 
         val occluders = bodies.filter { !it.type.isLuminous && !it.isBackgroundCluster && it.type != BodyType.BLACK_HOLE }
 
-        // 2. Orbit Trails & Slingshot Preview Trajectory
-        if (frame.config.showOrbits || slingshotPreview != null) {
+        // 2. Orbit Trails, Slingshot & Spawn Ghost Trajectory
+        if (frame.config.showOrbits || slingshotPreview != null || (spawnPreviewPos != null && spawnPreviewTrajectory.size >= 2)) {
             drawOrbitTrailsAndSlingshot(bodies, cameraOrigin, frame.config.showOrbits, logDepthCoef)
         }
 
@@ -448,6 +470,11 @@ class SolarGLRenderer(
                     planetProg.setFloat("uBodyRadius", rad)
                     planetProg.setVec3("uTidalDir", b.tidalStretchDir.x.toFloat(), b.tidalStretchDir.y.toFloat(), b.tidalStretchDir.z.toFloat())
                     planetProg.setFloat("uTidalStretch", b.tidalStretchAmount)
+                    planetProg.setVec3("uImpactDeformDir", b.impactDeformDir.x.toFloat(), b.impactDeformDir.y.toFloat(), b.impactDeformDir.z.toFloat())
+                    planetProg.setFloat("uImpactDeformAmount", b.impactDeformAmount)
+                    planetProg.setVec3("uImpactShockDir", b.impactShockDir.x.toFloat(), b.impactShockDir.y.toFloat(), b.impactShockDir.z.toFloat())
+                    planetProg.setFloat("uImpactShockAge", b.impactShockAge)
+                    planetProg.setVec3("uPrimaryStarPos", primaryStarPos.x.toFloat(), primaryStarPos.y.toFloat(), primaryStarPos.z.toFloat())
 
                     val style = when (b.type) {
                         BodyType.EARTH_LIKE -> 0
@@ -558,13 +585,13 @@ class SolarGLRenderer(
             annulusMesh.draw()
         }
 
-        // Habitable Zone Circumstellar Rings (Goldilocks zone 0.85*sqrt(L) .. 1.78*sqrt(L) AU)
+        // Expanded Red/Green/Blue Circumstellar Zones (0.28..4.20 * sqrt(L) AU)
         if (frame.config.showHabitableZone) {
             for (st in stars) {
                 if (st.luminositySolar <= 0.0001) continue
                 val sqrtL = sqrt(st.luminositySolar).toFloat().coerceIn(0.05f, 400f)
-                val innerAu = 0.85f * sqrtL
-                val outerAu = 1.78f * sqrtL
+                val innerAu = 0.28f * sqrtL
+                val outerAu = 4.20f * sqrtL
                 val rel = st.pos - cameraOrigin
                 Matrix.setIdentityM(modelMatrix, 0)
                 Matrix.translateM(modelMatrix, 0, rel.x.toFloat(), rel.y.toFloat(), rel.z.toFloat())
@@ -579,37 +606,55 @@ class SolarGLRenderer(
             }
         }
 
-        // Spawn Target Placement Reticle
+        // Spawn Target Placement Reticle + Translucent Preview Sphere
         val spPreview = spawnPreviewPos
         if (spPreview != null) {
             drawSpawnTargetReticle(spPreview, cameraOrigin, dist, logDepthCoef)
+            val spRel = spPreview - cameraOrigin
+            val ghostRad = spawnPreviewRadiusAu.coerceAtLeast(0.015f)
+            Matrix.setIdentityM(modelMatrix, 0)
+            Matrix.translateM(modelMatrix, 0, spRel.x.toFloat(), spRel.y.toFloat(), spRel.z.toFloat())
+            Matrix.scaleM(modelMatrix, 0, ghostRad, ghostRad, ghostRad)
+            GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE)
+            starProg.use()
+            starProg.setMat4("uModel", modelMatrix)
+            starProg.setMat4("uViewProj", viewProjMatrix)
+            starProg.setFloat("uLogDepthCoef", logDepthCoef)
+            starProg.setVec3("uBodyPos", spRel.x.toFloat(), spRel.y.toFloat(), spRel.z.toFloat())
+            starProg.setFloat("uBodyRadius", ghostRad)
+            starProg.setVec3("uTidalDir", 0f, 1f, 0f)
+            starProg.setFloat("uTidalStretch", 0f)
+            starProg.setVec3("uCamPos", eyeX, eyeY, eyeZ)
+            starProg.setVec3("uStarColor", 0.18f, 0.92f, 0.85f)
+            starProg.setFloat("uTime", animTimeSec)
+            starProg.setFloat("uSeed", 7f)
+            starProg.setFloat("uIntensity", 0.45f)
+            sphereLod1.draw()
+            GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
         }
 
-        // 3D Raymarched Schwarzschild Black Holes (with photon ring, curved top/bottom disk lensing & Doppler beaming)
+        // 3D Raymarched Schwarzschild Black Holes (with photon ring, background skybox lensing & 8-bin Doppler disk)
         if (blackHoles.isNotEmpty()) {
             GLES30.glEnable(GLES30.GL_CULL_FACE)
             GLES30.glCullFace(GLES30.GL_FRONT)
-            GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE_MINUS_SRC_ALPHA)
-
-            val tiltRad = Math.toRadians(14.0)
-            val nxRaw = (sin(tiltRad) * 0.24).toFloat()
-            val nyRaw = cos(tiltRad).toFloat()
-            val nzRaw = 0f
-            val nLen = sqrt(nxRaw * nxRaw + nyRaw * nyRaw + nzRaw * nzRaw).coerceAtLeast(1e-5f)
-            val nx = nxRaw / nLen; val ny = nyRaw / nLen; val nz = nzRaw / nLen
-            val rxRaw = ny; val ryRaw = -nx; val rzRaw = 0f
-            val rLen = sqrt(rxRaw * rxRaw + ryRaw * ryRaw + rzRaw * rzRaw).coerceAtLeast(1e-5f)
-            val ux = rxRaw / rLen; val uy = ryRaw / rLen; val uz = rzRaw / rLen
-            val fx = ny * uz - nz * uy
-            val fy = nz * ux - nx * uz
-            val fz = nx * uy - ny * ux
+            GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
 
             for (bh in blackHoles) {
                 val rel = bh.pos - cameraOrigin
                 val rad = bh.getVisualRadiusAu(trueScale).toFloat()
                 val horizonRad = rad * 0.45f
                 val boundRad = rad * 6.5f
-                val diskStrength = (bh.accretionActivity + (bh.absorbedMassSolar * 0.22).toFloat()).coerceIn(0f, 2.5f)
+                val bins = bh.diskProfile
+                val b0 = bins.getOrElse(0) { 0f }; val b1 = bins.getOrElse(1) { 0f }
+                val b2 = bins.getOrElse(2) { 0f }; val b3 = bins.getOrElse(3) { 0f }
+                val b4 = bins.getOrElse(4) { 0f }; val b5 = bins.getOrElse(5) { 0f }
+                val b6 = bins.getOrElse(6) { 0f }; val b7 = bins.getOrElse(7) { 0f }
+                val diskStrength = bh.accretionActivity.coerceIn(0f, 2.5f)
+
+                val normD = if (bh.diskPlaneNormal.lengthSq() > 1e-6) bh.diskPlaneNormal.normalized() else Vec3d(0.0, 1.0, 0.0)
+                val ref = if (abs(normD.y) < 0.92) Vec3d(0.0, 1.0, 0.0) else Vec3d(1.0, 0.0, 0.0)
+                val rightD = ref.cross(normD).normalized()
+                val fwdD = normD.cross(rightD).normalized()
 
                 Matrix.setIdentityM(modelMatrix, 0)
                 Matrix.translateM(modelMatrix, 0, rel.x.toFloat(), rel.y.toFloat(), rel.z.toFloat())
@@ -625,9 +670,11 @@ class SolarGLRenderer(
                 bhRelativisticProg.setFloat("uBoundRadius", boundRad)
                 bhRelativisticProg.setFloat("uTime", animTimeSec)
                 bhRelativisticProg.setFloat("uDiskStrength", diskStrength)
-                bhRelativisticProg.setVec3("uDiskNormal", nx, ny, nz)
-                bhRelativisticProg.setVec3("uDiskRight", ux, uy, uz)
-                bhRelativisticProg.setVec3("uDiskForward", fx, fy, fz)
+                bhRelativisticProg.setVec4("uDiskBins0", b0, b1, b2, b3)
+                bhRelativisticProg.setVec4("uDiskBins1", b4, b5, b6, b7)
+                bhRelativisticProg.setVec3("uDiskNormal", normD.x.toFloat(), normD.y.toFloat(), normD.z.toFloat())
+                bhRelativisticProg.setVec3("uDiskRight", rightD.x.toFloat(), rightD.y.toFloat(), rightD.z.toFloat())
+                bhRelativisticProg.setVec3("uDiskForward", fwdD.x.toFloat(), fwdD.y.toFloat(), fwdD.z.toFloat())
                 sphereLod1.draw()
             }
 
@@ -638,7 +685,7 @@ class SolarGLRenderer(
         // Additive Relativistic Polar Jets, Star Coronas, Tidal Filaments & Debris Particles
         GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE)
         for (bh in blackHoles) {
-            val diskStrength = (bh.accretionActivity + (bh.absorbedMassSolar * 0.22).toFloat()).coerceIn(0f, 2.5f)
+            val diskStrength = bh.accretionActivity.coerceIn(0f, 2.5f)
             if (diskStrength > 0.45f) {
                 val rel = bh.pos - cameraOrigin
                 val rad = bh.getVisualRadiusAu(trueScale).toFloat()
@@ -747,6 +794,24 @@ class SolarGLRenderer(
             lineBuf.position(0)
             GLES30.glBufferSubData(GLES30.GL_ARRAY_BUFFER, 0, count * 7 * 4, lineBuf)
             GLES30.glLineWidth(4.0f)
+            GLES30.glDrawArrays(GLES30.GL_LINE_STRIP, 0, count)
+            GLES30.glLineWidth(1.5f)
+        }
+
+        // Aim & Place ghost orbital preview path
+        val spTraj = spawnPreviewTrajectory
+        if (spawnPreviewPos != null && spTraj.size >= 2) {
+            val count = spTraj.size.coerceAtMost(maxLineVerts)
+            lineBuf.clear()
+            for (i in 0 until count) {
+                val rel = spTraj[i] - cameraOrigin
+                val alpha = (1.0f - i.toFloat() / count) * 0.85f
+                lineBuf.put(rel.x.toFloat()); lineBuf.put(rel.y.toFloat()); lineBuf.put(rel.z.toFloat())
+                lineBuf.put(0.18f); lineBuf.put(0.95f); lineBuf.put(0.72f); lineBuf.put(alpha)
+            }
+            lineBuf.position(0)
+            GLES30.glBufferSubData(GLES30.GL_ARRAY_BUFFER, 0, count * 7 * 4, lineBuf)
+            GLES30.glLineWidth(3.0f)
             GLES30.glDrawArrays(GLES30.GL_LINE_STRIP, 0, count)
             GLES30.glLineWidth(1.5f)
         }
@@ -890,12 +955,14 @@ class SolarGLRenderer(
         GLES30.glLineWidth(1.5f)
         GLES30.glBindVertexArray(0)
 
-        // Debris & Tidal Disruption Plasma Particles
+        // Debris, Ejecta & Orbiting Black Hole Accretion Parcels
         val pts = frame.particles
-        if (pts.isNotEmpty()) {
-            val count = pts.size.coerceAtMost(maxParticles)
+        val parcelsCount = majorBodies.sumOf { if (it.type == BodyType.BLACK_HOLE) it.accretionParcels.size else 0 }
+        if (pts.isNotEmpty() || parcelsCount > 0) {
             particleBuf.clear()
-            for (i in 0 until count) {
+            var count = 0
+            val ptsCount = pts.size.coerceAtMost(maxParticles)
+            for (i in 0 until ptsCount) {
                 val p = pts[i]
                 val fade = (1f - p.life / p.maxLife).coerceIn(0f, 1f)
                 particleBuf.put((p.x - cameraOrigin.x).toFloat())
@@ -905,17 +972,37 @@ class SolarGLRenderer(
                 particleBuf.put(p.g * fade * 1.5f)
                 particleBuf.put(p.b * fade * 1.5f)
                 particleBuf.put(p.size)
+                count++
             }
-            particleBuf.position(0)
-            particleProg.use()
-            particleProg.setMat4("uViewProj", viewProjMatrix)
-            particleProg.setFloat("uLogDepthCoef", logDepthCoef)
-            particleProg.setFloat("uPointScale", viewportH * 0.018f)
-            GLES30.glBindVertexArray(particleVao)
-            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, particleVbo)
-            GLES30.glBufferSubData(GLES30.GL_ARRAY_BUFFER, 0, count * 7 * 4, particleBuf)
-            GLES30.glDrawArrays(GLES30.GL_POINTS, 0, count)
-            GLES30.glBindVertexArray(0)
+            for (b in majorBodies) {
+                if (b.type != BodyType.BLACK_HOLE || b.accretionParcels.isEmpty()) continue
+                for (ap in b.accretionParcels) {
+                    if (count >= maxParticles) break
+                    val worldP = b.pos + ap.relPos
+                    val rgb = kelvinToRgb(ap.temperatureK.coerceIn(2200.0, 45000.0))
+                    val heatBoost = (1.1f + (ap.temperatureK / 18000.0).toFloat()).coerceIn(1.1f, 2.2f)
+                    particleBuf.put((worldP.x - cameraOrigin.x).toFloat())
+                    particleBuf.put((worldP.y - cameraOrigin.y).toFloat())
+                    particleBuf.put((worldP.z - cameraOrigin.z).toFloat())
+                    particleBuf.put(rgb.first * heatBoost)
+                    particleBuf.put(rgb.second * heatBoost)
+                    particleBuf.put(rgb.third * heatBoost)
+                    particleBuf.put(2.6f)
+                    count++
+                }
+            }
+            if (count > 0) {
+                particleBuf.position(0)
+                particleProg.use()
+                particleProg.setMat4("uViewProj", viewProjMatrix)
+                particleProg.setFloat("uLogDepthCoef", logDepthCoef)
+                particleProg.setFloat("uPointScale", viewportH * 0.018f)
+                GLES30.glBindVertexArray(particleVao)
+                GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, particleVbo)
+                GLES30.glBufferSubData(GLES30.GL_ARRAY_BUFFER, 0, count * 7 * 4, particleBuf)
+                GLES30.glDrawArrays(GLES30.GL_POINTS, 0, count)
+                GLES30.glBindVertexArray(0)
+            }
         }
     }
 

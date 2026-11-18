@@ -4,8 +4,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -16,10 +14,7 @@ import com.example.render.SolarGLRenderer
 import com.example.render.SolarGLSurfaceView
 import com.example.simulation.BodyArchetype
 import com.example.simulation.BodyType
-import com.example.simulation.Vec3d
 import com.example.ui.components.*
-import com.example.ui.theme.CyanTelemetry
-import com.example.ui.theme.PanelObsidian
 import com.example.viewmodel.SandboxToolTab
 import com.example.viewmodel.SandboxViewModel
 
@@ -47,6 +42,7 @@ fun SolarSandboxScreen(viewModel: SandboxViewModel) {
                     context = ctx,
                     renderer = renderer,
                     onTapBody = { id -> viewModel.selectBody(id) },
+                    onAimSpawnWorld = { worldPos -> viewModel.aimSpawnAtWorldPos(worldPos) },
                     onTapSpawnWorld = { worldPos -> viewModel.spawnAtWorldPos(worldPos) },
                     onSlingshotAim = { pos, vel -> viewModel.onSlingshotAim(pos, vel) },
                     onSlingshotRelease = { pos, vel -> viewModel.onSlingshotRelease(pos, vel) },
@@ -55,6 +51,7 @@ fun SolarSandboxScreen(viewModel: SandboxViewModel) {
             },
             update = { view ->
                 view.interactionMode = viewModel.getDesiredInteractionMode()
+                view.requireConfirmSpawn = uiState.spawnAim.requireConfirmSpawn
             },
             modifier = Modifier.fillMaxSize()
         )
@@ -74,19 +71,16 @@ fun SolarSandboxScreen(viewModel: SandboxViewModel) {
                 .fillMaxSize()
                 .windowInsetsPadding(WindowInsets.safeDrawing)
         ) {
-            // Cinematic Exit Pill
+            // Event-Driven Cinematic Collision HUD
             if (uiState.cinematicMode) {
-                Surface(
-                    shape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp),
-                    color = PanelObsidian,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(16.dp)
-                ) {
-                    androidx.compose.material3.TextButton(onClick = { viewModel.toggleCinematicMode() }) {
-                        Text("Exit Cinematic Mode", color = CyanTelemetry)
-                    }
-                }
+                CinematicCollisionOverlay(
+                    cinematicState = uiState.cinematicState,
+                    onTogglePause = { viewModel.toggleCinematicPaused() },
+                    onReplay = { viewModel.replayCinematicCollision() },
+                    onSetSpeed = { viewModel.setCinematicSpeed(it) },
+                    onSetPerspective = { viewModel.setCinematicPerspective(it) },
+                    onExit = { viewModel.exitCinematicMode() }
+                )
             }
 
             AnimatedVisibility(
@@ -110,6 +104,14 @@ fun SolarSandboxScreen(viewModel: SandboxViewModel) {
                         onToggleCinematic = { viewModel.toggleCinematicMode() },
                         modifier = Modifier.align(Alignment.TopCenter)
                     )
+
+                    if (uiState.config.showHabitableZone) {
+                        HabitableZoneLegendPill(
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .padding(top = 56.dp)
+                        )
+                    }
 
                     // Live Cosmic Activity & Selected Body Status Ticker
                     CosmicStatusTicker(
@@ -156,6 +158,17 @@ fun SolarSandboxScreen(viewModel: SandboxViewModel) {
                                 onSwitchToSpawnCatalog = { viewModel.setToolTab(SandboxToolTab.SPAWN) },
                                 onClose = { viewModel.setToolTab(SandboxToolTab.NONE) }
                             )
+                            SandboxToolTab.COLLIDE -> CollisionLabPanel(
+                                uiState = uiState,
+                                onSelectBodyA = { viewModel.selectCollisionBodyA(it) },
+                                onSelectBodyB = { viewModel.selectCollisionBodyB(it) },
+                                onAngleChange = { viewModel.setCollisionImpactAngle(it) },
+                                onSpeedChange = { viewModel.setCollisionSpeedRatio(it) },
+                                onToggleAutoCinematic = { viewModel.toggleCollisionAutoCinematic() },
+                                onLaunchCustom = { viewModel.launchCustomCollision() },
+                                onLaunchPreset = { viewModel.launchPresetCollision(it) },
+                                onClose = { viewModel.setToolTab(SandboxToolTab.NONE) }
+                            )
                             SandboxToolTab.WEAPONS -> WeaponsPanel(
                                 uiState = uiState,
                                 onAsteroidStrike = { viewModel.fireAsteroidStrike() },
@@ -188,10 +201,16 @@ fun SolarSandboxScreen(viewModel: SandboxViewModel) {
                             onSelectCategory = { viewModel.selectSpawnCategory(it) },
                             onSelectTemplate = { viewModel.selectSpawnTemplate(it) },
                             onToggleSpawnStationary = { viewModel.toggleSpawnStationary() },
-                            onSpawnQuickOrbit = {
-                                val r = 1.6 + (uiState.bodyCount % 5) * 0.45
-                                viewModel.spawnAtWorldPos(Vec3d(r, 0.0, 0.0))
+                            onToggleConfirmSpawn = { viewModel.toggleConfirmBeforeSpawn() },
+                            onNudgeRadius = { viewModel.nudgeSpawnRadius(it) },
+                            onCycleOrbitParent = {
+                                val majors = uiState.allBodiesList.filter { !it.isBackgroundCluster }
+                                val cur = uiState.spawnAim.orbitParentId
+                                val ids = listOf<Long?>(null) + majors.take(4).map { it.id }
+                                val nextIdx = (ids.indexOf(cur) + 1) % ids.size
+                                viewModel.setSpawnOrbitParent(ids[nextIdx])
                             },
+                            onPlaceHere = { viewModel.confirmSpawnAtAimedPos() },
                             onTogglePause = { viewModel.togglePause() },
                             onClose = { viewModel.setToolTab(SandboxToolTab.NONE) },
                             modifier = Modifier.align(Alignment.BottomCenter)

@@ -12,8 +12,8 @@ import kotlin.math.*
  */
 object EarthGeography {
 
-    const val MAP_W = 128
-    const val MAP_H = 64
+    const val MAP_W = 512
+    const val MAP_H = 256
 
     // Normalized elevation grid in [0f..1f]: < 0.48 = ocean/shelf, >= 0.48 = land, > 0.72 = mountains
     val elevationGrid: FloatArray by lazy { buildEarthElevationGrid() }
@@ -44,57 +44,70 @@ object EarthGeography {
     private val landFeatures = listOf(
         // North America
         LandBlob(-115.0, 56.0, 34.0, 14.0, -15.0, 0.56, 0.14),
-        LandBlob(-98.0, 40.0, 26.0, 14.0, 8.0, 0.56, 0.08),
-        LandBlob(-104.0, 22.0, 9.0, 10.0, -32.0, 0.48, 0.10), // Mexico
-        LandBlob(-148.0, 63.0, 14.0, 6.0, 10.0, 0.48, 0.12), // Alaska
-        LandBlob(-84.0, 11.0, 5.5, 4.5, -40.0, 0.36, 0.05), // Central America bridge
-        LandBlob(-114.0, 44.0, 6.0, 16.0, -18.0, 0.25, 0.32), // Rockies ridge
-        // Greenland
-        LandBlob(-42.0, 72.5, 16.0, 8.5, 18.0, 0.54, 0.14),
+        LandBlob(-96.0, 39.5, 25.0, 13.5, 8.0, 0.56, 0.08),
+        LandBlob(-103.5, 22.5, 8.5, 9.5, -32.0, 0.49, 0.11), // Mexico
+        LandBlob(-111.0, 26.0, 2.2, 6.0, -34.0, 0.34, 0.04), // Baja California
+        LandBlob(-81.5, 27.5, 2.2, 4.2, -12.0, 0.36, 0.01), // Florida
+        LandBlob(-150.0, 63.5, 14.5, 5.8, 8.0, 0.49, 0.12), // Alaska
+        LandBlob(-84.0, 11.0, 5.5, 4.2, -42.0, 0.37, 0.05), // Central America bridge
+        LandBlob(-114.0, 44.0, 5.5, 16.5, -18.0, 0.25, 0.34), // Rockies ridge
+        LandBlob(-69.0, 55.0, 9.0, 7.0, 12.0, 0.46, 0.05),   // Quebec/Labrador
+        // Greenland & Iceland
+        LandBlob(-42.0, 72.5, 15.5, 8.5, 18.0, 0.55, 0.15),
+        LandBlob(-18.5, 65.0, 4.0, 2.2, 10.0, 0.34, 0.08),
         // South America
-        LandBlob(-61.0, -4.0, 17.0, 14.0, -12.0, 0.58, 0.08),
-        LandBlob(-52.0, -14.0, 14.0, 11.0, 15.0, 0.54, 0.06),
-        LandBlob(-65.0, -28.0, 8.0, 13.0, 10.0, 0.50, 0.12),
-        LandBlob(-69.0, -45.0, 4.5, 11.0, 5.0, 0.44, 0.18), // Patagonia
-        LandBlob(-72.0, -18.0, 3.8, 22.0, -6.0, 0.26, 0.36), // Andes chain
+        LandBlob(-61.0, -4.0, 16.5, 13.5, -12.0, 0.58, 0.08),
+        LandBlob(-51.0, -14.0, 13.5, 11.0, 15.0, 0.54, 0.06),
+        LandBlob(-65.0, -28.0, 7.8, 13.0, 10.0, 0.50, 0.12),
+        LandBlob(-69.0, -45.0, 4.2, 11.0, 5.0, 0.44, 0.18), // Patagonia
+        LandBlob(-72.0, -18.0, 3.6, 22.0, -6.0, 0.26, 0.38), // Andes chain
         // Africa
         LandBlob(8.0, 21.0, 23.0, 13.0, 0.0, 0.58, 0.05),   // Sahara / North Africa
-        LandBlob(24.0, 6.0, 18.0, 14.0, -5.0, 0.58, 0.08),  // Central Africa
+        LandBlob(24.0, 6.0, 17.5, 14.0, -5.0, 0.58, 0.08),  // Central Africa
         LandBlob(25.0, -18.0, 11.0, 13.0, 6.0, 0.55, 0.12), // Southern Africa
-        LandBlob(43.0, 9.0, 7.5, 6.5, 25.0, 0.46, 0.14),    // Horn of Africa
-        LandBlob(46.8, -19.0, 3.2, 6.5, 16.0, 0.40, 0.08),  // Madagascar
+        LandBlob(44.0, 9.0, 7.0, 6.0, 25.0, 0.46, 0.14),    // Horn of Africa
+        LandBlob(46.8, -19.0, 2.8, 6.2, 16.0, 0.40, 0.08),  // Madagascar
         // Europe
-        LandBlob(12.0, 49.0, 18.0, 8.5, 12.0, 0.52, 0.12),
-        LandBlob(-4.0, 40.5, 6.5, 4.5, 0.0, 0.44, 0.10),    // Iberia
-        LandBlob(16.0, 62.5, 10.0, 8.0, 30.0, 0.48, 0.14),  // Scandinavia
-        LandBlob(-2.5, 54.0, 3.5, 4.5, 5.0, 0.38, 0.05),    // Great Britain
+        LandBlob(13.0, 49.0, 17.5, 8.2, 12.0, 0.52, 0.12),
+        LandBlob(-4.0, 40.2, 5.8, 4.0, 0.0, 0.45, 0.10),    // Iberia
+        LandBlob(12.5, 42.5, 2.2, 4.8, -32.0, 0.38, 0.12),  // Italy
+        LandBlob(16.0, 62.5, 9.5, 7.5, 32.0, 0.48, 0.15),   // Scandinavia
+        LandBlob(-2.5, 54.0, 3.0, 4.2, 5.0, 0.39, 0.05),    // Great Britain
+        LandBlob(-8.0, 53.3, 1.8, 2.2, 10.0, 0.33, 0.03),   // Ireland
         // Asia & Middle East
-        LandBlob(46.0, 24.0, 11.0, 9.0, -22.0, 0.54, 0.08), // Arabia
-        LandBlob(64.0, 56.0, 36.0, 15.0, 4.0, 0.58, 0.08),  // Russia / Siberia west
-        LandBlob(112.0, 60.0, 38.0, 13.0, -6.0, 0.56, 0.12),// Siberia east
-        LandBlob(88.0, 39.0, 28.0, 14.0, 5.0, 0.60, 0.24),  // Central Asia / Tibet
-        LandBlob(85.0, 31.0, 14.0, 6.5, -12.0, 0.32, 0.45), // Himalayas peak
-        LandBlob(78.0, 21.0, 8.5, 11.0, 0.0, 0.54, 0.06),   // India
-        LandBlob(111.0, 31.0, 15.0, 12.0, 10.0, 0.56, 0.08),// East China
-        LandBlob(102.0, 15.0, 7.0, 8.5, -15.0, 0.46, 0.06), // SE Asia
-        LandBlob(138.0, 36.5, 4.0, 6.5, 35.0, 0.38, 0.12),  // Japan
-        LandBlob(114.0, 0.5, 7.0, 5.0, 0.0, 0.36, 0.06),    // Borneo / Maritime SE Asia
-        LandBlob(141.0, -5.0, 8.0, 4.5, -18.0, 0.38, 0.10), // New Guinea
+        LandBlob(46.0, 23.5, 10.5, 8.5, -22.0, 0.54, 0.08), // Arabia
+        LandBlob(64.0, 56.0, 36.0, 14.5, 4.0, 0.58, 0.08),  // Russia / Siberia west
+        LandBlob(112.0, 60.0, 37.0, 12.5, -6.0, 0.56, 0.12),// Siberia east
+        LandBlob(160.0, 56.0, 3.5, 6.5, 22.0, 0.36, 0.14),  // Kamchatka
+        LandBlob(88.0, 39.0, 28.0, 13.5, 5.0, 0.60, 0.25),  // Central Asia / Tibet
+        LandBlob(85.0, 31.0, 14.0, 6.2, -12.0, 0.32, 0.48), // Himalayas peak
+        LandBlob(78.0, 20.5, 8.0, 10.5, 0.0, 0.54, 0.06),   // India
+        LandBlob(80.7, 7.8, 1.6, 2.2, 0.0, 0.33, 0.04),    // Sri Lanka
+        LandBlob(111.0, 31.5, 15.0, 11.5, 10.0, 0.56, 0.08),// East China
+        LandBlob(102.5, 15.0, 6.5, 8.2, -15.0, 0.46, 0.06), // SE Asia / Indochina
+        LandBlob(138.0, 36.5, 3.4, 6.2, 38.0, 0.39, 0.14),  // Japan
+        LandBlob(121.5, 12.5, 2.2, 4.5, -10.0, 0.34, 0.06), // Philippines
+        LandBlob(102.0, -0.5, 6.0, 2.4, -38.0, 0.36, 0.08), // Sumatra
+        LandBlob(114.5, 0.8, 5.0, 4.2, 0.0, 0.38, 0.06),    // Borneo
+        LandBlob(141.0, -5.0, 7.5, 4.2, -18.0, 0.38, 0.10), // New Guinea
         // Australia & NZ
-        LandBlob(134.0, -25.0, 18.0, 11.0, -8.0, 0.56, 0.06),
-        LandBlob(172.0, -42.0, 3.2, 5.2, 32.0, 0.36, 0.14),
+        LandBlob(134.0, -25.0, 17.5, 10.5, -8.0, 0.56, 0.06),
+        LandBlob(172.0, -42.0, 2.8, 5.0, 32.0, 0.37, 0.15),
         // Antarctica
-        LandBlob(0.0, -83.0, 180.0, 11.0, 0.0, 0.62, 0.20),
-        LandBlob(75.0, -73.0, 65.0, 6.5, 0.0, 0.48, 0.14)
+        LandBlob(0.0, -83.0, 180.0, 11.0, 0.0, 0.62, 0.22),
+        LandBlob(75.0, -73.0, 65.0, 6.2, 0.0, 0.48, 0.14)
     )
 
     private val oceanCuts = listOf(
-        // Mediterranean & Red Sea & Hudson Bay & Gulf of Mexico
-        LandBlob(18.0, 35.5, 18.0, 4.5, -8.0, -0.44, 0.0),
-        LandBlob(38.0, 20.0, 3.5, 8.0, -28.0, -0.34, 0.0),
-        LandBlob(-85.0, 59.0, 9.0, 6.5, 0.0, -0.40, 0.0),
-        LandBlob(-90.0, 25.0, 9.5, 6.0, 0.0, -0.42, 0.0),
-        LandBlob(51.0, 26.5, 4.5, 3.0, -30.0, -0.26, 0.0)
+        // Mediterranean, Red Sea, Black Sea, Caspian Sea, Persian Gulf, Hudson Bay, Gulf of Mexico, Baltic
+        LandBlob(18.0, 35.5, 18.0, 4.3, -8.0, -0.46, 0.0),
+        LandBlob(38.0, 20.0, 3.2, 7.8, -28.0, -0.36, 0.0),
+        LandBlob(34.0, 43.2, 5.5, 2.2, 0.0, -0.32, 0.0),
+        LandBlob(51.0, 41.5, 2.5, 4.8, 0.0, -0.30, 0.0),
+        LandBlob(-85.0, 59.0, 9.2, 6.5, 0.0, -0.44, 0.0),
+        LandBlob(-90.0, 24.5, 9.5, 5.8, 0.0, -0.44, 0.0),
+        LandBlob(51.0, 26.5, 4.2, 2.8, -30.0, -0.28, 0.0),
+        LandBlob(19.0, 58.0, 4.5, 4.0, 25.0, -0.28, 0.0)
     )
 
     private fun buildEarthElevationGrid(): FloatArray {
@@ -134,8 +147,9 @@ object EarthGeography {
                 // Deterministic multi-harmonic coastline irregularity
                 val lonR = Math.toRadians(lon)
                 val latR = Math.toRadians(lat)
-                val coastWobble = 0.045 * sin(lonR * 7.0 + latR * 5.0) +
-                    0.025 * cos(lonR * 13.0 - latR * 9.0)
+                val coastWobble = 0.042 * sin(lonR * 7.0 + latR * 5.0) +
+                    0.024 * cos(lonR * 13.0 - latR * 9.0) +
+                    0.012 * sin(lonR * 23.0 + latR * 17.0)
                 grid[y * MAP_W + x] = (h + mountain + coastWobble).toFloat().coerceIn(0.0f, 1.0f)
             }
         }

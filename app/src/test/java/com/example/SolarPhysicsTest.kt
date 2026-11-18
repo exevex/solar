@@ -277,4 +277,79 @@ class SolarPhysicsTest {
         assertTrue("Frozen Earth should have high ice cover, got ${frozen.iceCoverPct}", frozen.iceCoverPct >= 80)
         assertTrue("Hot magma Earth should show molten coverage, got ${magma.moltenPct}", magma.moltenPct > 10)
     }
+
+    @Test
+    fun `solar system planets maintain monotonic astronomical radius proportions`() {
+        val snap = SolarSystemPresets.buildPreset(SystemPreset.SOLAR_SYSTEM)
+        fun rad(name: String): Double = snap.bodies.first { it.name == name }.getVisualRadiusAu(false)
+        assertTrue(rad("Mercury") < rad("Mars"))
+        assertTrue(rad("Mars") < rad("Earth"))
+        assertTrue(rad("Earth") < rad("Neptune"))
+        assertTrue(rad("Neptune") < rad("Uranus"))
+        assertTrue(rad("Uranus") < rad("Saturn"))
+        assertTrue(rad("Saturn") < rad("Jupiter"))
+    }
+
+    @Test
+    fun `black hole spawns dark without accretion disk and builds disk bins during tidal disruption`() {
+        val engine = PhysicsEngine()
+        val bh = CelestialBody(
+            id = 1L, name = "Schwarzschild BH", type = BodyType.BLACK_HOLE,
+            pos = Vec3d.ZERO, vel = Vec3d.ZERO,
+            massSolar = 15.0, radiusKm = 44.3, temperatureK = 0.0
+        )
+        assertEquals(0f, bh.accretionActivity, 1e-6f)
+        assertTrue("Newly spawned black hole should start with empty diskProfile", bh.diskProfile.all { it == 0f })
+
+        val star = CelestialBody(
+            id = 2L, name = "Donor Star", type = BodyType.STAR,
+            pos = Vec3d(0.16, 0.0, 0.0), vel = Vec3d(0.0, 0.0, 6.0),
+            massSolar = 1.0, radiusKm = 696_340.0, temperatureK = 5778.0, luminositySolar = 1.0
+        )
+        engine.loadSnapshot(SimulationSnapshot("DiskGrowth", "test", 0.0, listOf(bh, star), SimulationConfig(timeScaleYearsPerSec = 0.04)))
+        repeat(30) { engine.step(0.025) }
+
+        val bhAfter = engine.getBodiesSnapshot().first { it.type == BodyType.BLACK_HOLE }
+        assertTrue("Black hole should spawn orbiting accretion parcels or build radial disk bins", bhAfter.diskProfile.max() > 0.01f || bhAfter.accretionParcels.isNotEmpty())
+        assertTrue("Black hole accretionActivity should increase after tidal disruption", bhAfter.accretionActivity > 0.05f)
+    }
+
+    @Test
+    fun `collision physics distinguishes grazing hit-and-run from hypervelocity disruption`() {
+        val engine = PhysicsEngine()
+
+        // High-angle oblique grazing collision -> Hit & Run leaves >= 2 major bodies
+        engine.launchPresetCollisionScenario(CollisionScenarioPreset.GRAZING_WORLDS, impactAngleDeg = 68.0, speedVsEscapeRatio = 1.65, startCinematic = false)
+        repeat(150) { engine.step(0.035) }
+        val grazingSurvivors = engine.getBodiesSnapshot().filter { !it.isBackgroundCluster && it.type != BodyType.STAR && it.type != BodyType.DEBRIS }
+        assertTrue("Grazing hit-and-run should leave both worlds surviving, got ${grazingSurvivors.size}", grazingSurvivors.size >= 2)
+
+        // Head-on hypervelocity rocky collision -> catastrophic disruption & macroscopic debris remnants
+        engine.launchPresetCollisionScenario(CollisionScenarioPreset.ROCKY_HEAD_ON, impactAngleDeg = 4.0, speedVsEscapeRatio = 2.6, startCinematic = false)
+        repeat(150) { engine.step(0.035) }
+        val headOnBodies = engine.getBodiesSnapshot()
+        val hasDebrisOrCrateredRemnant = headOnBodies.any { it.type == BodyType.DEBRIS || it.crustHeat > 0.25f || it.craters.isNotEmpty() }
+        assertTrue("Head-on hypervelocity collision should produce debris fragments or intensely heated cratered remnant", hasDebrisOrCrateredRemnant)
+    }
+
+    @Test
+    fun `cinematic collision director activates, advances phase on impact, and replays cleanly`() {
+        val engine = PhysicsEngine()
+        engine.launchPresetCollisionScenario(CollisionScenarioPreset.EARTH_THEIA, startCinematic = true)
+        val initialFrame = engine.buildRenderFrameState(60f)
+        assertTrue("Cinematic mode should start active", initialFrame.cinematicState.isActive)
+        assertEquals(CinematicPhase.WIDE_APPROACH, initialFrame.cinematicState.phase)
+        assertFalse(initialFrame.cinematicState.impactOccurred)
+
+        repeat(150) { engine.step(0.035) }
+        val midFrame = engine.buildRenderFrameState(60f)
+        assertTrue("Earth-Theia preset should reach impact within test steps", midFrame.cinematicState.impactOccurred)
+
+        engine.replayCinematicCollision()
+        val replayFrame = engine.buildRenderFrameState(60f)
+        assertTrue(replayFrame.cinematicState.isActive)
+        assertFalse("Replay should reset impactOccurred back to pre-impact approach", replayFrame.cinematicState.impactOccurred)
+        assertEquals(CinematicPhase.WIDE_APPROACH, replayFrame.cinematicState.phase)
+    }
 }
+

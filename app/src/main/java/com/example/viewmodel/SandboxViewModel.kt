@@ -21,9 +21,25 @@ enum class SandboxToolTab {
     DRAG,
     SPAWN,
     SLINGSHOT,
+    COLLIDE,
     WEAPONS,
     INSPECT
 }
+
+data class SpawnAimState(
+    val targetPos: Vec3d? = null,
+    val orbitParentId: Long? = null,
+    val radiusFromParentAu: Double = 1.6,
+    val requireConfirmSpawn: Boolean = true
+)
+
+data class CollisionSetupState(
+    val bodyAId: Long = 3L,
+    val bodyBId: Long = 5L,
+    val impactAngleDeg: Float = 26f,
+    val speedRatio: Float = 1.35f,
+    val autoCinematic: Boolean = true
+)
 
 enum class SpawnCategory(val label: String) {
     BLACK_HOLES("Black Holes"),
@@ -63,6 +79,7 @@ data class SandboxUiState(
     val fps: Float = 60f,
     val simTps: Float = 60f,
     val cinematicMode: Boolean = false,
+    val cinematicState: CinematicDirectorState = CinematicDirectorState(),
     val eventBanner: String? = null,
     val activityFeed: List<String> = emptyList(),
     val screenLabels: List<ScreenBodyLabel> = emptyList(),
@@ -71,6 +88,8 @@ data class SandboxUiState(
     val showQualityDialog: Boolean = false,
     val showSaveLoadDialog: Boolean = false,
     val spawnStationary: Boolean = false,
+    val spawnAim: SpawnAimState = SpawnAimState(),
+    val collisionSetup: CollisionSetupState = CollisionSetupState(),
     val showEarthMapOverlay: Boolean = false,
     val allBodiesList: List<CelestialBody> = emptyList()
 )
@@ -247,7 +266,7 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
                     tpsAccum = 0.0
                 }
 
-                val packet = engine.buildRenderFrameState(currentTps)
+                    val packet = engine.buildRenderFrameState(currentTps)
                 renderFrameRef.set(packet)
 
                 // Publish UI telemetry at ~12 Hz to keep Compose light and battery-friendly
@@ -264,6 +283,8 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
                             bodyCount = packet.bodies.size,
                             config = packet.config,
                             simTps = packet.simTps,
+                            cinematicMode = packet.cinematicState.isActive,
+                            cinematicState = packet.cinematicState,
                             eventBanner = packet.lastEventMessage,
                             activityFeed = packet.activityFeed,
                             allBodiesList = packet.bodies.filter { !it.isBackgroundCluster }
@@ -317,9 +338,50 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun toggleCinematicMode() {
-        val next = !_uiState.value.cinematicMode
-        glRenderer?.cinematicMode = next
-        _uiState.update { it.copy(cinematicMode = next) }
+        if (engine.cinematicState.isActive) {
+            engine.exitCinematicMode()
+        } else {
+            engine.startCinematicShowcase(_uiState.value.selectedBodyId)
+        }
+        syncCinematicImmediate()
+    }
+
+    fun toggleCinematicPaused() {
+        engine.setCinematicPaused(!engine.cinematicState.isPaused)
+        syncCinematicImmediate()
+    }
+
+    fun setCinematicSpeed(speed: Float) {
+        engine.setCinematicPlaybackSpeed(speed)
+        syncCinematicImmediate()
+    }
+
+    fun setCinematicPerspective(p: CinematicPerspective) {
+        engine.setCinematicPerspective(p)
+        syncCinematicImmediate()
+    }
+
+    fun replayCinematicCollision() {
+        engine.replayCinematicCollision()
+        syncCinematicImmediate()
+    }
+
+    fun exitCinematicMode() {
+        engine.exitCinematicMode()
+        glRenderer?.cinematicMode = false
+        syncCinematicImmediate()
+    }
+
+    private fun syncCinematicImmediate() {
+        val cs = engine.cinematicState
+        glRenderer?.cinematicMode = cs.isActive
+        _uiState.update {
+            it.copy(
+                cinematicMode = cs.isActive,
+                cinematicState = cs,
+                config = engine.config
+            )
+        }
     }
 
     fun updateScreenLabels(labels: List<ScreenBodyLabel>) {
@@ -369,6 +431,14 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
 
     fun toggleSpawnStationary() {
         _uiState.update { it.copy(spawnStationary = !it.spawnStationary) }
+        _uiState.value.spawnAim.targetPos?.let { aimSpawnAtWorldPos(it) }
+    }
+
+    fun toggleConfirmBeforeSpawn() {
+        _uiState.update { state ->
+            val next = !state.spawnAim.requireConfirmSpawn
+            state.copy(spawnAim = state.spawnAim.copy(requireConfirmSpawn = next))
+        }
     }
 
     fun toggleEarthMapOverlay() {
@@ -400,15 +470,28 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
         _uiState.update { it.copy(config = engine.config) }
     }
 
-    // ==================== TOOL MODES, SPAWN & SLINGSHOT ====================
+    // ==================== TOOL MODES, AIM-AND-PLACE SPAWN & SLINGSHOT ====================
 
     fun setToolTab(tab: SandboxToolTab) {
         _uiState.update {
             val next = if (it.activeToolTab == tab) SandboxToolTab.NONE else tab
             if (next != SandboxToolTab.SPAWN) {
                 glRenderer?.spawnPreviewPos = null
+                glRenderer?.spawnPreviewTrajectory = emptyList()
             }
             it.copy(activeToolTab = next)
+        }
+        if (_uiState.value.activeToolTab == SandboxToolTab.SPAWN) {
+            val existing = _uiState.value.spawnAim.targetPos
+            if (existing != null) {
+                aimSpawnAtWorldPos(existing)
+            } else {
+                val focus = _uiState.value.selectedBodyId?.let { engine.getBodyById(it) }
+                    ?: engine.getBodiesSnapshot().firstOrNull { !it.isBackgroundCluster }
+                val basePos = focus?.pos ?: Vec3d.ZERO
+                val offset = 1.6 + (_uiState.value.bodyCount % 4) * 0.45
+                aimSpawnAtWorldPos(basePos + Vec3d(offset, 0.0, 0.0))
+            }
         }
     }
 
@@ -424,15 +507,80 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
     fun selectSpawnCategory(cat: SpawnCategory) {
         val firstInCat = SpawnCatalog.all.firstOrNull { it.category == cat } ?: SpawnCatalog.all.first()
         _uiState.update { it.copy(selectedSpawnCategory = cat, selectedSpawnTemplate = firstInCat) }
+        _uiState.value.spawnAim.targetPos?.let { aimSpawnAtWorldPos(it) }
     }
 
     fun selectSpawnTemplate(template: SpawnTemplate) {
         _uiState.update { it.copy(selectedSpawnTemplate = template) }
+        _uiState.value.spawnAim.targetPos?.let { aimSpawnAtWorldPos(it) }
+    }
+
+    fun aimSpawnAtWorldPos(worldPos: Vec3d) {
+        val state = _uiState.value
+        val tpl = state.selectedSpawnTemplate
+        val bodies = engine.getBodiesSnapshot().filter { !it.isBackgroundCluster }
+        val parent = state.spawnAim.orbitParentId?.let { pid -> bodies.firstOrNull { it.id == pid } }
+            ?: bodies.maxByOrNull { it.massSolar / (worldPos - it.pos).lengthSq().coerceAtLeast(1e-6) }
+        val radiusFromParent = if (parent != null) (worldPos - parent.pos).length() else worldPos.length()
+        val launchVel = if (state.spawnStationary) Vec3d.ZERO else engine.computeCircularOrbitVelocityForParent(worldPos, parent?.id)
+        val previewTraj = if (state.spawnStationary) {
+            emptyList()
+        } else {
+            engine.predictTrajectory(worldPos, launchVel, steps = 56, stepDt = 0.024)
+        }
+        val previewRad = templateVisualRadiusAu(tpl, engine.config.trueScaleMode)
+
+        glRenderer?.spawnPreviewPos = worldPos
+        glRenderer?.spawnPreviewRadiusAu = previewRad
+        glRenderer?.spawnPreviewTrajectory = previewTraj
+
+        _uiState.update {
+            it.copy(
+                spawnAim = it.spawnAim.copy(
+                    targetPos = worldPos,
+                    radiusFromParentAu = radiusFromParent
+                )
+            )
+        }
+    }
+
+    fun setSpawnOrbitParent(parentId: Long?) {
+        _uiState.update { it.copy(spawnAim = it.spawnAim.copy(orbitParentId = parentId)) }
+        _uiState.value.spawnAim.targetPos?.let { aimSpawnAtWorldPos(it) }
+    }
+
+    fun nudgeSpawnRadius(factor: Double) {
+        val state = _uiState.value
+        val curPos = state.spawnAim.targetPos ?: Vec3d(1.6, 0.0, 0.0)
+        val bodies = engine.getBodiesSnapshot().filter { !it.isBackgroundCluster }
+        val parent = state.spawnAim.orbitParentId?.let { pid -> bodies.firstOrNull { it.id == pid } }
+            ?: bodies.maxByOrNull { it.massSolar / (curPos - it.pos).lengthSq().coerceAtLeast(1e-6) }
+        val center = parent?.pos ?: Vec3d.ZERO
+        val rel = curPos - center
+        val curR = rel.length().coerceAtLeast(0.08)
+        val dir = if (rel.lengthSq() > 1e-8) rel.normalized() else Vec3d(1.0, 0.0, 0.0)
+        val nextR = (curR * factor).coerceIn(0.08, 60.0)
+        aimSpawnAtWorldPos(center + dir * nextR)
+    }
+
+    fun confirmSpawnAtAimedPos() {
+        val target = _uiState.value.spawnAim.targetPos ?: Vec3d(1.6 + (_uiState.value.bodyCount % 5) * 0.45, 0.0, 0.0)
+        spawnAtWorldPos(target)
+    }
+
+    private fun templateVisualRadiusAu(tpl: SpawnTemplate, trueScale: Boolean): Float {
+        val dummy = CelestialBody(
+            id = 0L, name = tpl.name, type = tpl.type,
+            pos = Vec3d.ZERO, vel = Vec3d.ZERO,
+            massSolar = tpl.massSolar, radiusKm = tpl.radiusKm, temperatureK = tpl.temperatureK
+        )
+        return dummy.getVisualRadiusAu(trueScale).toFloat()
     }
 
     fun spawnAtWorldPos(worldPos: Vec3d, explicitVel: Vec3d? = null) {
         val tpl = _uiState.value.selectedSpawnTemplate
-        val vel = explicitVel ?: if (_uiState.value.spawnStationary) Vec3d.ZERO else computeCircularOrbitVelocity(worldPos)
+        val parentId = _uiState.value.spawnAim.orbitParentId
+        val vel = explicitVel ?: if (_uiState.value.spawnStationary) Vec3d.ZERO else engine.computeCircularOrbitVelocityForParent(worldPos, parentId)
         val archetype = when (tpl.id) {
             "earth_like" -> BodyArchetype.EARTH
             "rocky_mars" -> BodyArchetype.MARS
@@ -465,18 +613,83 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
             evolutionStage = if (tpl.type.isLuminous) EvolutionStage.MAIN_SEQUENCE else EvolutionStage.NONE
         )
         val newId = engine.spawnBody(body)
-        selectBody(newId)
+        if (_uiState.value.activeToolTab == SandboxToolTab.SPAWN) {
+            glRenderer?.selectedBodyId = newId
+            _uiState.update { it.copy(selectedBodyId = newId) }
+            // Keep preview slightly offset so user can inspect/place more cleanly
+            aimSpawnAtWorldPos(worldPos)
+        } else {
+            selectBody(newId)
+        }
     }
 
-    private fun computeCircularOrbitVelocity(pos: Vec3d): Vec3d {
-        val bodies = engine.getBodiesSnapshot()
-        val dominant = bodies.filter { !it.isBackgroundCluster }.maxByOrNull { it.massSolar / (pos - it.pos).lengthSq().coerceAtLeast(1e-6) }
-            ?: return Vec3d.ZERO
-        val rel = pos - dominant.pos
-        val r = rel.length().coerceAtLeast(0.05)
-        val speed = sqrt(AstroConstants.G_AU * dominant.massSolar / r)
-        val tangent = Vec3d(-rel.z, 0.0, rel.x).normalized()
-        return dominant.vel + tangent * speed
+    // ==================== COLLISION LAB SCENARIO CONTROLS ====================
+
+    fun selectCollisionBodyA(id: Long) {
+        _uiState.update { it.copy(collisionSetup = it.collisionSetup.copy(bodyAId = id)) }
+    }
+
+    fun selectCollisionBodyB(id: Long) {
+        _uiState.update { it.copy(collisionSetup = it.collisionSetup.copy(bodyBId = id)) }
+    }
+
+    fun setCollisionImpactAngle(deg: Float) {
+        _uiState.update { it.copy(collisionSetup = it.collisionSetup.copy(impactAngleDeg = deg.coerceIn(0f, 84f))) }
+    }
+
+    fun setCollisionSpeedRatio(ratio: Float) {
+        _uiState.update { it.copy(collisionSetup = it.collisionSetup.copy(speedRatio = ratio.coerceIn(0.6f, 4.0f))) }
+    }
+
+    fun toggleCollisionAutoCinematic() {
+        _uiState.update { it.copy(collisionSetup = it.collisionSetup.copy(autoCinematic = !it.collisionSetup.autoCinematic)) }
+    }
+
+    fun launchCustomCollision() {
+        val setup = _uiState.value.collisionSetup
+        val launched = engine.launchCollisionScenario(
+            bodyAId = setup.bodyAId,
+            bodyBId = setup.bodyBId,
+            impactAngleDeg = setup.impactAngleDeg.toDouble(),
+            speedVsEscapeRatio = setup.speedRatio.toDouble(),
+            startCinematic = setup.autoCinematic
+        )
+        if (launched) {
+            glRenderer?.focusedBodyId = setup.bodyAId
+            glRenderer?.selectedBodyId = setup.bodyAId
+            if (setup.autoCinematic) {
+                _uiState.update { it.copy(activeToolTab = SandboxToolTab.NONE) }
+                syncCinematicImmediate()
+            } else {
+                syncConfigImmediate()
+            }
+        }
+    }
+
+    fun launchPresetCollision(preset: CollisionScenarioPreset) {
+        val setup = _uiState.value.collisionSetup
+        engine.launchPresetCollisionScenario(
+            preset = preset,
+            impactAngleDeg = preset.defaultAngleDeg.toDouble(),
+            speedVsEscapeRatio = preset.defaultSpeedRatio.toDouble(),
+            startCinematic = setup.autoCinematic
+        )
+        glRenderer?.focusedBodyId = 2L
+        glRenderer?.selectedBodyId = 2L
+        glRenderer?.manualPanOffset = Vec3d.ZERO
+        _uiState.update {
+            it.copy(
+                selectedBodyId = 2L,
+                activeToolTab = if (setup.autoCinematic) SandboxToolTab.NONE else it.activeToolTab,
+                collisionSetup = setup.copy(
+                    bodyAId = 2L,
+                    bodyBId = 3L,
+                    impactAngleDeg = preset.defaultAngleDeg,
+                    speedRatio = preset.defaultSpeedRatio
+                )
+            )
+        }
+        syncCinematicImmediate()
     }
 
     fun onSlingshotAim(spawnPos: Vec3d, launchVel: Vec3d) {
@@ -564,7 +777,10 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
     fun loadPreset(preset: SystemPreset) {
         val snapshot = SolarSystemPresets.buildPreset(preset)
         engine.loadSnapshot(snapshot)
-        val focusId = snapshot.bodies.firstOrNull()?.id
+        val major = snapshot.bodies.filter { !it.isBackgroundCluster }
+        val focusId = major.firstOrNull()?.id
+        val defA = major.getOrNull(1)?.id ?: focusId ?: 1L
+        val defB = major.getOrNull(2)?.id ?: major.firstOrNull()?.id ?: 2L
         glRenderer?.focusedBodyId = focusId
         glRenderer?.selectedBodyId = focusId
         glRenderer?.manualPanOffset = Vec3d.ZERO
@@ -579,7 +795,10 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
             it.copy(
                 currentPreset = preset,
                 selectedBodyId = focusId,
-                showPresetsDialog = false
+                showPresetsDialog = false,
+                cinematicMode = false,
+                cinematicState = CinematicDirectorState(),
+                collisionSetup = it.collisionSetup.copy(bodyAId = defA, bodyBId = defB)
             )
         }
     }
@@ -597,10 +816,18 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
     fun loadSavedSlot(fileName: String) {
         val snap = saveRepo.loadSave(fileName) ?: return
         engine.loadSnapshot(snap)
-        val focusId = snap.bodies.firstOrNull()?.id
+        val major = snap.bodies.filter { !it.isBackgroundCluster }
+        val focusId = major.firstOrNull()?.id
         glRenderer?.focusedBodyId = focusId
         glRenderer?.selectedBodyId = focusId
-        _uiState.update { it.copy(selectedBodyId = focusId, showSaveLoadDialog = false) }
+        _uiState.update {
+            it.copy(
+                selectedBodyId = focusId,
+                showSaveLoadDialog = false,
+                cinematicMode = false,
+                cinematicState = CinematicDirectorState()
+            )
+        }
     }
 
     fun deleteSavedSlot(fileName: String) {

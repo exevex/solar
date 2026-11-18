@@ -40,7 +40,10 @@ fun SpawnDrawer(
     onSelectCategory: (SpawnCategory) -> Unit,
     onSelectTemplate: (SpawnTemplate) -> Unit,
     onToggleSpawnStationary: () -> Unit,
-    onSpawnQuickOrbit: () -> Unit,
+    onToggleConfirmSpawn: () -> Unit,
+    onNudgeRadius: (Double) -> Unit,
+    onCycleOrbitParent: () -> Unit,
+    onPlaceHere: () -> Unit,
     onTogglePause: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier
@@ -48,6 +51,9 @@ fun SpawnDrawer(
     val filtered = remember(uiState.selectedSpawnCategory) {
         SpawnCatalog.all.filter { it.category == uiState.selectedSpawnCategory }
     }
+    val parentName = uiState.spawnAim.orbitParentId?.let { pid ->
+        uiState.allBodiesList.firstOrNull { it.id == pid }?.name
+    } ?: "Auto"
 
     GlassHudSurface(
         modifier = modifier
@@ -57,13 +63,13 @@ fun SpawnDrawer(
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(7.dp)
         ) {
-            // Header row: Category pills + action buttons (leaves all cards completely unobstructed!)
+            // Header row: Category pills + Velocity & Confirm toggles + Place Here CTA
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(7.dp)
             ) {
                 LazyRow(
                     modifier = Modifier.weight(1f),
@@ -84,6 +90,51 @@ fun SpawnDrawer(
                     }
                 }
 
+                // Target Orbit Distance & Parent Nudge Pill
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = PanelElevated,
+                    border = BorderStroke(1.dp, HairlineBorder),
+                    modifier = Modifier.heightIn(min = 38.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = "R=${String.format("%.2f", uiState.spawnAim.radiusFromParentAu)} AU",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = EmeraldOrbit
+                        )
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = PanelObsidian,
+                            modifier = Modifier.clickable { onNudgeRadius(0.78) }.testTag("spawn_radius_down")
+                        ) {
+                            Text("-", style = MaterialTheme.typography.labelSmall, color = TextPrimary, modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp))
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = PanelObsidian,
+                            modifier = Modifier.clickable { onNudgeRadius(1.28) }.testTag("spawn_radius_up")
+                        ) {
+                            Text("+", style = MaterialTheme.typography.labelSmall, color = TextPrimary, modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp))
+                        }
+                        VerticalDivider(modifier = Modifier.height(16.dp), color = HairlineBorder)
+                        Text(
+                            text = "Parent: $parentName",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = CyanTelemetry,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable { onCycleOrbitParent() }
+                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                                .testTag("spawn_parent_toggle")
+                        )
+                    }
+                }
+
                 Surface(
                     shape = RoundedCornerShape(10.dp),
                     color = if (uiState.spawnStationary) AmberWarm.copy(alpha = 0.18f) else CyanTelemetry.copy(alpha = 0.14f),
@@ -93,24 +144,42 @@ fun SpawnDrawer(
                         .clickable { onToggleSpawnStationary() }
                         .testTag("spawn_velocity_mode_btn")
                 ) {
-                    Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp)) {
                         Text(
-                            text = if (uiState.spawnStationary) "Drop Still" else "Circular Orbit",
+                            text = if (uiState.spawnStationary) "Still" else "Orbit",
                             style = MaterialTheme.typography.labelSmall,
                             color = if (uiState.spawnStationary) AmberWarm else CyanTelemetry
                         )
                     }
                 }
 
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (uiState.spawnAim.requireConfirmSpawn) EmeraldOrbit.copy(alpha = 0.16f) else AmberWarm.copy(alpha = 0.16f),
+                    border = BorderStroke(1.dp, if (uiState.spawnAim.requireConfirmSpawn) EmeraldOrbit else AmberWarm),
+                    modifier = Modifier
+                        .heightIn(min = 38.dp)
+                        .clickable { onToggleConfirmSpawn() }
+                        .testTag("spawn_confirm_mode_btn")
+                ) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp)) {
+                        Text(
+                            text = if (uiState.spawnAim.requireConfirmSpawn) "Aim & Place" else "Instant Tap",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (uiState.spawnAim.requireConfirmSpawn) EmeraldOrbit else AmberWarm
+                        )
+                    }
+                }
+
                 Button(
-                    onClick = onSpawnQuickOrbit,
-                    modifier = Modifier.heightIn(min = 38.dp).testTag("spawn_orbit_btn"),
+                    onClick = onPlaceHere,
+                    modifier = Modifier.heightIn(min = 38.dp).testTag("spawn_place_here_btn"),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = EmeraldOrbit, contentColor = SpaceVoid)
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.MyLocation, contentDescription = stringResource(R.string.cd_place_here), modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text("Quick Place", style = MaterialTheme.typography.labelMedium)
+                    Text("Place Here", style = MaterialTheme.typography.labelMedium)
                 }
 
                 IconButton(onClick = onTogglePause, modifier = Modifier.size(36.dp).testTag("spawn_play_pause_btn")) {
@@ -220,6 +289,166 @@ fun SlingshotHintCard(
                 border = BorderStroke(1.dp, HairlineCyan)
             ) {
                 Text("Ammo: ${template.name}", color = CyanTelemetry, style = MaterialTheme.typography.labelMedium)
+            }
+        }
+    }
+}
+
+@Composable
+fun CollisionLabPanel(
+    uiState: SandboxUiState,
+    onSelectBodyA: (Long) -> Unit,
+    onSelectBodyB: (Long) -> Unit,
+    onAngleChange: (Float) -> Unit,
+    onSpeedChange: (Float) -> Unit,
+    onToggleAutoCinematic: () -> Unit,
+    onLaunchCustom: () -> Unit,
+    onLaunchPreset: (CollisionScenarioPreset) -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val setup = uiState.collisionSetup
+    val candidates = remember(uiState.allBodiesList) {
+        uiState.allBodiesList.filter { it.type != BodyType.BLACK_HOLE }
+    }
+    GlassHudSurface(
+        modifier = modifier.width(320.dp).fillMaxHeight(),
+        borderColor = AmberWarm.copy(alpha = 0.65f)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text("Collision Lab", style = MaterialTheme.typography.titleMedium, color = AmberWarm)
+                    Text("Physical impact scaling & shockwaves", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                }
+                IconButton(onClick = onClose, modifier = Modifier.size(34.dp)) {
+                    Icon(Icons.Default.Close, contentDescription = stringResource(R.string.cd_close_panel), tint = TextSecondary)
+                }
+            }
+
+            Text("Quick Collision Scenarios", style = MaterialTheme.typography.labelMedium, color = CyanTelemetry)
+            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                CollisionScenarioPreset.entries.forEach { preset ->
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = PanelElevated,
+                        border = BorderStroke(1.dp, AmberWarm.copy(alpha = 0.45f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onLaunchPreset(preset) }
+                            .testTag("collision_preset_${preset.id}")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(preset.title, style = MaterialTheme.typography.labelMedium, color = TextPrimary)
+                                Text(preset.subtitle, style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                            }
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = AmberWarm, modifier = Modifier.size(18.dp))
+                        }
+                    }
+                }
+            }
+
+            HorizontalDivider(color = HairlineBorder)
+            Text("Custom Two-Body Impact", style = MaterialTheme.typography.labelMedium, color = AmberWarm)
+
+            Text("Target Body (A)", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(candidates, key = { "colA_${it.id}" }) { body ->
+                    val sel = body.id == setup.bodyAId
+                    FilterChip(
+                        selected = sel,
+                        onClick = { onSelectBodyA(body.id) },
+                        label = { Text(body.name, style = MaterialTheme.typography.labelSmall) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = CyanTelemetry.copy(alpha = 0.22f),
+                            selectedLabelColor = CyanTelemetry
+                        )
+                    )
+                }
+            }
+
+            Text("Impactor Body (B)", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(candidates, key = { "colB_${it.id}" }) { body ->
+                    val sel = body.id == setup.bodyBId
+                    FilterChip(
+                        selected = sel,
+                        onClick = { onSelectBodyB(body.id) },
+                        label = { Text(body.name, style = MaterialTheme.typography.labelSmall) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = DangerNova.copy(alpha = 0.22f),
+                            selectedLabelColor = DangerNova
+                        )
+                    )
+                }
+            }
+
+            Column {
+                val angleLabel = when {
+                    setup.impactAngleDeg < 15f -> "Head-On (${setup.impactAngleDeg.toInt()}°)"
+                    setup.impactAngleDeg < 48f -> "Oblique (${setup.impactAngleDeg.toInt()}°)"
+                    else -> "Grazing Hit & Run (${setup.impactAngleDeg.toInt()}°)"
+                }
+                Text("Impact Angle: $angleLabel", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+                Slider(
+                    value = setup.impactAngleDeg / 80f,
+                    onValueChange = { onAngleChange(it * 80f) },
+                    modifier = Modifier.height(26.dp).testTag("collision_angle_slider"),
+                    colors = SliderDefaults.colors(thumbColor = AmberWarm, activeTrackColor = AmberWarm, inactiveTrackColor = HairlineBorder)
+                )
+            }
+
+            Column {
+                Text(
+                    text = "Relative Speed: ${String.format("%.2f", setup.speedRatio)}× Mutual Escape Velocity",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextPrimary
+                )
+                Slider(
+                    value = ((setup.speedRatio - 0.7f) / 2.8f).coerceIn(0f, 1f),
+                    onValueChange = { onSpeedChange(0.7f + it * 2.8f) },
+                    modifier = Modifier.height(26.dp).testTag("collision_speed_slider"),
+                    colors = SliderDefaults.colors(thumbColor = DangerNova, activeTrackColor = DangerNova, inactiveTrackColor = HairlineBorder)
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Cinematic Impact Camera", style = MaterialTheme.typography.labelMedium, color = TextPrimary)
+                    Text("Auto-tracks approach, shock & fragments", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                }
+                Switch(
+                    checked = setup.autoCinematic,
+                    onCheckedChange = { onToggleAutoCinematic() },
+                    modifier = Modifier.testTag("collision_auto_cinematic_switch")
+                )
+            }
+
+            Button(
+                onClick = onLaunchCustom,
+                enabled = setup.bodyAId != setup.bodyBId && candidates.size >= 2,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp).testTag("launch_collision_btn"),
+                colors = ButtonDefaults.buttonColors(containerColor = DangerNova, contentColor = TextPrimary)
+            ) {
+                Icon(Icons.Default.FlashOn, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Launch Collision", style = MaterialTheme.typography.labelLarge)
             }
         }
     }

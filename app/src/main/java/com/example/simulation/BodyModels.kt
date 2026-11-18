@@ -87,6 +87,30 @@ data class RingSystem(
     val hasCassiniGap: Boolean = true
 )
 
+data class AccretionParcel(
+    val relPos: Vec3d,
+    val relVel: Vec3d,
+    val massSolar: Double,
+    val temperatureK: Double,
+    val ageSec: Float = 0f
+)
+
+enum class CinematicPerspective(val label: String) {
+    AUTO("Auto Director"),
+    WIDE_APPROACH("Wide Approach"),
+    CLOSE_IMPACT("Impact Close-Up"),
+    EJECTA_PLUME("Ejecta Plume"),
+    FRAGMENT_TRACK("Track Remnant")
+}
+
+enum class CinematicPhase(val label: String) {
+    WIDE_APPROACH("Approach Trajectory"),
+    CLOSE_IMPACT("Contact & Compression"),
+    EJECTA_PLUME("Ejecta Plume Expansion"),
+    FRAGMENT_TRACK("Remnant & Debris Evolution"),
+    DEBRIS_WIDE("Debris Field Overview")
+}
+
 data class CelestialBody(
     val id: Long,
     val name: String,
@@ -117,6 +141,10 @@ data class CelestialBody(
     val ringSystem: RingSystem? = null,
     val craters: List<CraterMark> = emptyList(),
     val crustHeat: Float = 0f,
+    val impactDeformDir: Vec3d = Vec3d(1.0, 0.0, 0.0),
+    val impactDeformAmount: Float = 0f,
+    val impactShockDir: Vec3d = Vec3d(0.0, 1.0, 0.0),
+    val impactShockAge: Float = 999f,
     val ageGyr: Double = 4.6,
     val initialMassSolar: Double = massSolar,
     val evolutionStage: EvolutionStage = EvolutionStage.NONE,
@@ -124,6 +152,9 @@ data class CelestialBody(
     val parentBodyId: Long? = null,
     val accretionActivity: Float = 0f,
     val absorbedMassSolar: Double = 0.0,
+    val diskProfile: List<Float> = listOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f),
+    val diskPlaneNormal: Vec3d = Vec3d(0.24, 0.97, 0.0).normalized(),
+    val accretionParcels: List<AccretionParcel> = emptyList(),
     val tidalStress: Float = 0f,
     val tidalStretchDir: Vec3d = Vec3d(1.0, 0.0, 0.0),
     val tidalStretchAmount: Float = 0f,
@@ -136,28 +167,34 @@ data class CelestialBody(
     fun getVisualRadiusAu(trueScale: Boolean): Double {
         if (trueScale) return physicsRadiusAu
         return when (type) {
-            BodyType.STAR, BodyType.RED_GIANT ->
-                (physicsRadiusAu * 26.0).coerceIn(0.028, 0.58)
+            BodyType.STAR ->
+                (physicsRadiusAu * 28.0).coerceIn(0.035, 0.34)
+            BodyType.RED_GIANT ->
+                (physicsRadiusAu * 18.0).coerceIn(0.16, 0.65)
             BodyType.WHITE_DWARF, BodyType.NEUTRON_STAR ->
-                (physicsRadiusAu * 180.0).coerceIn(0.015, 0.045)
+                (physicsRadiusAu * 200.0).coerceIn(0.015, 0.045)
             BodyType.BLACK_HOLE -> {
                 val rsAu = AstroConstants.SCHWARZSCHILD_SUN_AU * massSolar
-                (rsAu * 4200.0).coerceIn(0.024, 0.28)
+                (rsAu * 4400.0).coerceIn(0.025, 0.28)
             }
-            BodyType.GAS_GIANT ->
-                (physicsRadiusAu * 280.0).coerceIn(0.045, 0.135)
-            BodyType.ICE_GIANT ->
-                (physicsRadiusAu * 340.0).coerceIn(0.035, 0.095)
-            BodyType.EARTH_LIKE, BodyType.TERRESTRIAL_PLANET ->
-                (physicsRadiusAu * 720.0).coerceIn(0.020, 0.062)
-            BodyType.DWARF_PLANET ->
-                (physicsRadiusAu * 1100.0).coerceIn(0.012, 0.028)
-            BodyType.MOON ->
-                (physicsRadiusAu * 750.0).coerceIn(0.008, 0.020)
+            // Monotonic power-law planetary scaling so Jupiter (~0.129 AU), Saturn (~0.113), Uranus/Neptune (~0.060),
+            // Earth/Venus (~0.022), Mars (~0.0134), Mercury (~0.0103), Moon (~0.0079), Pluto (~0.0061)
+            // maintain authentic relative astronomical proportions while remaining clearly visible in Sandbox Clear View.
+            BodyType.GAS_GIANT,
+            BodyType.ICE_GIANT,
+            BodyType.EARTH_LIKE,
+            BodyType.TERRESTRIAL_PLANET,
+            BodyType.DWARF_PLANET,
+            BodyType.MOON -> {
+                val relEarth = (radiusKm / 6371.0).coerceAtLeast(0.01)
+                (Math.pow(relEarth, 0.74) * 0.022).coerceIn(0.0045, 0.165)
+            }
             BodyType.ASTEROID, BodyType.COMET ->
-                (physicsRadiusAu * 1500.0).coerceIn(0.004, 0.012)
-            BodyType.DEBRIS ->
-                (physicsRadiusAu * 1100.0).coerceIn(0.003, 0.010)
+                (physicsRadiusAu * 1400.0).coerceIn(0.0038, 0.010)
+            BodyType.DEBRIS -> {
+                val relEarth = (radiusKm / 6371.0).coerceAtLeast(0.01)
+                (Math.pow(relEarth, 0.74) * 0.022).coerceIn(0.0032, 0.045)
+            }
         }
     }
 
@@ -215,7 +252,8 @@ data class DebrisParticle(
     var r: Float,
     var g: Float,
     var b: Float,
-    var targetBlackHoleId: Long = -1L
+    var targetBlackHoleId: Long = -1L,
+    var affectedByGravity: Boolean = true
 )
 
 data class GammaBurstBeam(

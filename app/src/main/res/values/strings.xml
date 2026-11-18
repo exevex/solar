@@ -19,5 +19,9 @@
     <string name="cd_mode_spawn">Spawn celestial bodies</string>
     <string name="cd_mode_slingshot">Slingshot launch mode</string>
     <string name="cd_mode_weapons">Cosmic weapons and events</string>
+    <string name="cd_mode_collide">Planetary collision lab</string>
     <string name="cd_mode_edit">Inspect and edit selected object</string>
+    <string name="cd_cinematic_replay">Replay collision sequence</string>
+    <string name="cd_cinematic_exit">Exit cinematic camera</string>
+    <string name="cd_place_here">Confirm placement at aimed location</string>
 </resources>

@@ -72,6 +72,12 @@ object SnapshotSerializer {
                 put("evolutionStage", b.evolutionStage.name)
                 put("accretionActivity", b.accretionActivity.toDouble())
                 put("absorbedMassSolar", b.absorbedMassSolar)
+                put("diskNormalX", b.diskPlaneNormal.x)
+                put("diskNormalY", b.diskPlaneNormal.y)
+                put("diskNormalZ", b.diskPlaneNormal.z)
+                val dpArr = JSONArray()
+                for (bin in b.diskProfile) dpArr.put(bin.toDouble())
+                put("diskProfile", dpArr)
                 put("isBackgroundCluster", b.isBackgroundCluster)
                 if (b.parentBodyId != null) put("parentBodyId", b.parentBodyId)
 
@@ -203,6 +209,16 @@ object SnapshotSerializer {
                     parentBodyId = if (bj.has("parentBodyId")) bj.getLong("parentBodyId") else null,
                     accretionActivity = bj.optDouble("accretionActivity", 0.0).toFloat(),
                     absorbedMassSolar = bj.optDouble("absorbedMassSolar", 0.0),
+                    diskPlaneNormal = Vec3d(
+                        bj.optDouble("diskNormalX", 0.24),
+                        bj.optDouble("diskNormalY", 0.97),
+                        bj.optDouble("diskNormalZ", 0.0)
+                    ).normalized(),
+                    diskProfile = bj.optJSONArray("diskProfile")?.let { arr ->
+                        List(8) { idx ->
+                            if (idx < arr.length()) arr.optDouble(idx, 0.0).toFloat() else 0f
+                        }
+                    } ?: listOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f),
                     isBackgroundCluster = bj.optBoolean("isBackgroundCluster", false)
                 )
             )
