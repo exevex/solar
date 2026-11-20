@@ -111,6 +111,7 @@ fun QualitySettingsDialog(
     onIntegratorChange: (IntegratorMode) -> Unit,
     onToggleTrueScale: () -> Unit,
     onToggleHabitableZone: () -> Unit,
+    onToggleEventText: () -> Unit,
     onDismiss: () -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
