@@ -19,7 +19,7 @@
   - Hypervelocity catastrophic fragmentation spawning glowing molten debris chunks and particle bursts.
 
 ### Real observation assets & physics provenance
-- **Mapped Solar-System bodies:** The app applies packaged NASA/JPL, mission, and Solar System Scope surface maps to named UV spheres. These improve surface identity but are not measured triangle meshes or uniformly precise elevation models; see the asset-specific notes and checksums in [REAL_DATA_SOURCES.md](REAL_DATA_SOURCES.md).
+- **Earth geometry and imagery:** Earth uses a WGS84 oblate ellipsoid mesh with GEBCO-derived land-height samples, NASA MODIS September 2004 Blue Marble surface imagery, and independent VIIRS 2016 night lights. Globe and 2-D map share north-up geography, not synthetic continent blobs. Other named worlds remain mapped spheres; source epochs, projection, hashes and resolution limits are in [REAL_DATA_SOURCES.md](REAL_DATA_SOURCES.md).
 - **JPL initial conditions:** The Solar System preset loads DE441/JPL Horizons J2000 state vectors for the Sun, planets and tracked moons, then evolves them with the selected N-body integrator.
 - **Physical collision model:** Gravity softening, contact radii, impact energy and Roche limits use physical radii rather than sandbox display radii. Swept contacts prevent fast objects tunneling through a body between simulation samples.
 - **Event text toggle:** Physics events continue to happen when the HUD event-text switch is off; only the explanatory toast is hidden.
@@ -27,7 +27,7 @@
 
 ### Visuals & OpenGL ES 3.0 Shaders
 - **Floating Origin + Logarithmic Depth:** World coordinates are subtracted in 64-bit `Double` precision relative to the camera focus target before uploading `Float` matrices, paired with logarithmic depth encoding to eliminate jitter and z-fighting from planetary surfaces out to 100+ AU.
-- **Mapped Worlds & Physical Body Radii:** Mission and NASA/JPL surface imagery is mapped onto UV-sphere geometry for named bodies; procedural relief and atmosphere effects add depth, but the app does not include measured triangle terrain meshes. Named-world visual maps plus attribution/limitations are documented in [REAL_DATA_SOURCES.md](REAL_DATA_SOURCES.md). Earth, Mars, Mercury/Moon and giant-planet shaders retain climate, cloud, crater and atmospheric effects.
+- **Earth mesh and mapped worlds:** Earth's 65,341-vertex mesh samples clipped, quantized 0–6400 m GEBCO land elevation without vertical exaggeration. This is globe-scale relief, not a survey-resolution terrain model. Other worlds retain mapped UV spheres. Clouds and edited-climate effects are illustrative overlays, not observed weather or climate forecasts.
 - **Habitable Zone Overlay:** Toggleable **Habitable Zone** Goldilocks view rendering dynamic liquid-water circumstellar rings (`0.85√L`–`1.78√L` AU) around every luminous star as you edit stellar mass or luminosity.
 - **Atmosphere, Shadows & Eclipses:** Rayleigh/Mie rim scattering with orange-red sunset terminators, analytical ray-sphere eclipse shadows across planets/moons, and mutual Saturn ring/planet shadows.
 - **HDR Stars & Post-Processing:** Planckian blackbody star colors (O, B, A, F, G, K, M), dual-scale animated solar granulation & chromosphere limb glow, limb darkening, additive plasma corona & pulsar beams, multi-pass separable Gaussian **Bloom**, and ACES Filmic tone mapping.
@@ -35,7 +35,7 @@
 
 ### Black Holes & Relativistic Effects
 - **Black Holes of Any Mass:** Easily spawn Primordial (3 $M_\odot$), Stellar (12 $M_\odot$), Intermediate (80 $M_\odot$), or Supermassive (350 $M_\odot$) black holes from the `Black Holes` spawn category, or scale mass to infinity in the Inspector.
-- **3D Schwarzschild Geodesic Raymarched Black Holes:** Null-geodesic raymarching on GPU bends light rays smoothly around the pitch-black event horizon shadow, rendering a sharp photon ring, gravitationally lensed upper/lower accretion arches, and relativistic Doppler beaming. Newly spawned isolated black holes start disk-free and **progressively build a swirling accretion disk & polar jets** as they absorb stars, planets, and matter.
+- **Interstellar-inspired black-hole look:** A default, explicitly labeled cinematic option shows a luminous disk and lensed upper/lower arches around a dark shadow, with polar jets suppressed. Switch it off in Graphics & Physics Settings to make disk brightness depend on simulated accretion. Appearance never adds physical mass or changes gravity. This is an artistic, approximate optical renderer—not the movie's production model or full Kerr ray tracing.
 - **Smooth Tidal Spaghettification & Disruption (TDE):** Bodies entering the Roche zone elongate into a smooth $C^1$ teardrop toward the black hole, heat up with tidal shear glow, shed L1-anchored **orbiting spiral plasma filaments** (`TidalStreamFilament`) into the black hole, and transfer mass (`Absorbed Mass` tracked live). Tiny rocky specks hitting stars or gas giants vaporize cleanly without spurious debris/craters.
 - **Hawking Evaporation & Mergers:** Optional Hawking radiation mass loss culminating in an evaporation flash, plus binary black hole inspirals and gravitational-wave merger ripples.
 
@@ -58,7 +58,7 @@
 ## Known Limits
 - **True Scale vs. Sandbox Clear View:** At exact 1:1 km/AU scale, terrestrial planets are tiny dots at solar-system zoom levels. The default *Sandbox Clear View* applies enlarged planetary/solar visual scaling while keeping orbital physics at true AU radii; toggle *True Astronomical Scale* in Settings.
 - **N-Body Particle Scaling:** Asteroid-to-asteroid mutual $N^2$ forces are skipped for background belt clusters to maintain 60 FPS on mid-range mobile CPUs (they still experience full gravity from the Sun and all major planets/black holes).
-- **Relativistic optics approximation:** The renderer integrates a fixed 44-step Schwarzschild null-geodesic approximation inside a black-hole bounding volume; it is not full Kerr ray tracing. Clear View intentionally enlarges the visible horizon; True Scale uses the physical Schwarzschild radius.
+- **Relativistic optics approximation:** The radius-scaled marcher has a 512-step work cap. Unresolved near-critical rays are treated as shadow to avoid background leakage. Clear View enlarges the visible horizon; True Scale uses the physical Schwarzschild radius. Cinematic disk emission is artistic; neither look is full Kerr ray tracing.
 - **AI and scientific limits:** The copilot is a language-model explainer, not a numerical solver or live JPL lookup. Its request sends the question, displayed simulation context, and up to eight prior turns to Google's Gemini API; confirm important facts independently.
 
 ## Build an APK
@@ -70,3 +70,5 @@ Use a desktop Android SDK with API 36.1 and Build-Tools 36.0.0, then run the inc
 ```
 
 No custom keystore or API keys are needed for debug builds. GitHub Actions runs the same checks on a clean checkout and uploads the verified APK and reports. See [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md) for downloads, stable debug signing, release signing, and phone/Termux guidance.
+
+CI also renders actual GLSL on a surfaceless EGL/GLES3 context with the production Earth mesh exported by tests. It verifies map landmark colors and context recreation, checks captured/escaping black-hole paths and bright upper/lower arches, and uploads PNGs plus JSON under `Solar-Sandbox-visual-verification`. These are rendering checks, not proof of scientific completeness, performance on every phone, or film equivalence.

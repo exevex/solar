@@ -53,6 +53,10 @@ fun SolarSandboxScreen(viewModel: SandboxViewModel) {
     LaunchedEffect(uiState.graphicsSettings) {
         renderer.graphicsSettings = uiState.graphicsSettings
     }
+    LaunchedEffect(uiState.config.cinematicBlackHoles) {
+        renderer.blackHoleLook = if (uiState.config.cinematicBlackHoles)
+            com.example.render.BlackHoleLook.INTERSTELLAR_CINEMATIC else com.example.render.BlackHoleLook.PHYSICAL_DISK_ONLY
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         // 1. Full-Bleed Hardware-Accelerated OpenGL ES 3.0 Space Viewport
@@ -273,6 +277,7 @@ fun SolarSandboxScreen(viewModel: SandboxViewModel) {
                 onToggleTrueScale = { viewModel.toggleTrueScale() },
                 onToggleHabitableZone = { viewModel.toggleHabitableZone() },
                 onToggleEventText = { viewModel.toggleEventText() },
+                onToggleCinematicBlackHoles = { viewModel.toggleCinematicBlackHoles() },
                 onDismiss = { viewModel.setQualityDialogVisible(false) }
             )
         }

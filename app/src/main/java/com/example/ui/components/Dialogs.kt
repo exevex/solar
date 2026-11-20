@@ -112,6 +112,7 @@ fun QualitySettingsDialog(
     onToggleTrueScale: () -> Unit,
     onToggleHabitableZone: () -> Unit,
     onToggleEventText: () -> Unit,
+    onToggleCinematicBlackHoles: () -> Unit,
     onDismiss: () -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
@@ -191,6 +192,14 @@ fun QualitySettingsDialog(
                         Text("Hide event banners without disabling the events", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
                     }
                     Switch(checked = uiState.config.showEventText, onCheckedChange = { onToggleEventText() }, modifier = Modifier.testTag("toggle_event_text"))
+                }
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Interstellar-inspired Black Holes", style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
+                        Text("On: artistic luminous disk + lensed arches, no jets. Off: disk follows simulated accretion. Physics is unchanged.", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                    }
+                    Switch(checked = uiState.config.cinematicBlackHoles, onCheckedChange = { onToggleCinematicBlackHoles() }, modifier = Modifier.testTag("toggle_cinematic_black_holes"))
                 }
 
                 Text("N-Body Integrator", style = MaterialTheme.typography.labelMedium, color = TextSecondary)

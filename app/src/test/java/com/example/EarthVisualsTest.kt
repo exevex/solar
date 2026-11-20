@@ -17,6 +17,21 @@ import kotlin.math.abs
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
 class EarthVisualsTest {
+    @Test fun `cinematic disk appearance persists without changing gravity`() {
+        for (enabled in listOf(false, true)) {
+            val snapshot = SolarSystemPresets.buildPreset(SystemPreset.BINARY_STARS).copy(
+                config = SimulationConfig(cinematicBlackHoles = enabled))
+            val restored = SnapshotSerializer.fromJsonString(SnapshotSerializer.toJsonString(snapshot))
+            assertEquals(enabled, restored.config.cinematicBlackHoles)
+        }
+        val base = SolarSystemPresets.buildPreset(SystemPreset.BINARY_STARS)
+        val a = PhysicsEngine(); val b = PhysicsEngine()
+        a.loadSnapshot(base.copy(config = base.config.copy(cinematicBlackHoles = false)))
+        b.loadSnapshot(base.copy(config = base.config.copy(cinematicBlackHoles = true)))
+        repeat(6) { a.step(0.01); b.step(0.01) }
+        assertEquals(a.getBodiesSnapshot().map { it.pos to it.vel }, b.getBodiesSnapshot().map { it.pos to it.vel })
+    }
+
     private fun initialize() = EarthGeography.initialize(ApplicationProvider.getApplicationContext<Context>())
 
     @Test fun `earth uses WGS84 ellipsoid not a generic sphere`() {

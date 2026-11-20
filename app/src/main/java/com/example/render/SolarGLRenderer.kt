@@ -402,6 +402,7 @@ class SolarGLRenderer(
             val screenPt = projectToScreen(rx, ry, rz)
             if (screenPt != null) {
                 val tag = when {
+                    b.type == BodyType.BLACK_HOLE && blackHoleLook == BlackHoleLook.INTERSTELLAR_CINEMATIC -> "CINEMATIC DISK"
                     b.tidalStretchAmount > 0.16f || b.tidalStress > 0.12f -> "SPAGHETTIFYING"
                     b.type == BodyType.BLACK_HOLE && b.accretionActivity > 0.55f -> "ACCRETING"
                     b.type == BodyType.RED_GIANT -> "RED GIANT"
@@ -705,6 +706,7 @@ class SolarGLRenderer(
                 bhRelativisticProg.setVec3("uDiskNormal", normD.x.toFloat(), normD.y.toFloat(), normD.z.toFloat())
                 bhRelativisticProg.setVec3("uDiskRight", rightD.x.toFloat(), rightD.y.toFloat(), rightD.z.toFloat())
                 bhRelativisticProg.setVec3("uDiskForward", fwdD.x.toFloat(), fwdD.y.toFloat(), fwdD.z.toFloat())
+                bhRelativisticProg.setInt("uCinematicLook", if (blackHoleLook == BlackHoleLook.INTERSTELLAR_CINEMATIC) 1 else 0)
                 sphereLod1.draw()
             }
 
@@ -714,27 +716,29 @@ class SolarGLRenderer(
 
         // Additive Relativistic Polar Jets, Star Coronas, Tidal Filaments & Debris Particles
         GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE)
-        for (bh in blackHoles) {
-            val diskStrength = bh.accretionActivity.coerceIn(0f, 2.5f)
-            if (diskStrength > 0.45f) {
-                val rel = bh.pos - cameraOrigin
-                val rad = bh.getVisualRadiusAu(trueScale).toFloat()
-                val vx = eyeX - rel.x.toFloat()
-                val vz = eyeZ - rel.z.toFloat()
-                val camYawDeg = Math.toDegrees(atan2(vx.toDouble(), vz.toDouble())).toFloat()
-                val jetLen = rad * (5.2f + diskStrength * 3.8f)
-                Matrix.setIdentityM(modelMatrix, 0)
-                Matrix.translateM(modelMatrix, 0, rel.x.toFloat(), rel.y.toFloat(), rel.z.toFloat())
-                modelMatrix[0] = cos(Math.toRadians(camYawDeg.toDouble())).toFloat() * jetLen
-                modelMatrix[2] = -sin(Math.toRadians(camYawDeg.toDouble())).toFloat() * jetLen
-                modelMatrix[5] = jetLen
-                bhJetProg.use()
-                bhJetProg.setMat4("uModel", modelMatrix)
-                bhJetProg.setMat4("uViewProj", viewProjMatrix)
-                bhJetProg.setFloat("uLogDepthCoef", logDepthCoef)
-                bhJetProg.setFloat("uTime", animTimeSec)
-                bhJetProg.setFloat("uAccretionActivity", diskStrength)
-                quadMesh.draw()
+        if (blackHoleLook != BlackHoleLook.INTERSTELLAR_CINEMATIC) {
+            for (bh in blackHoles) {
+                val diskStrength = bh.accretionActivity.coerceIn(0f, 2.5f)
+                if (diskStrength > 0.45f) {
+                    val rel = bh.pos - cameraOrigin
+                    val rad = bh.getVisualRadiusAu(trueScale).toFloat()
+                    val vx = eyeX - rel.x.toFloat()
+                    val vz = eyeZ - rel.z.toFloat()
+                    val camYawDeg = Math.toDegrees(atan2(vx.toDouble(), vz.toDouble())).toFloat()
+                    val jetLen = rad * (5.2f + diskStrength * 3.8f)
+                    Matrix.setIdentityM(modelMatrix, 0)
+                    Matrix.translateM(modelMatrix, 0, rel.x.toFloat(), rel.y.toFloat(), rel.z.toFloat())
+                    modelMatrix[0] = cos(Math.toRadians(camYawDeg.toDouble())).toFloat() * jetLen
+                    modelMatrix[2] = -sin(Math.toRadians(camYawDeg.toDouble())).toFloat() * jetLen
+                    modelMatrix[5] = jetLen
+                    bhJetProg.use()
+                    bhJetProg.setMat4("uModel", modelMatrix)
+                    bhJetProg.setMat4("uViewProj", viewProjMatrix)
+                    bhJetProg.setFloat("uLogDepthCoef", logDepthCoef)
+                    bhJetProg.setFloat("uTime", animTimeSec)
+                    bhJetProg.setFloat("uAccretionActivity", diskStrength)
+                    quadMesh.draw()
+                }
             }
         }
 

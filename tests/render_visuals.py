@@ -150,6 +150,7 @@ def earth_position(lat,lon):
 
 def earth_render(defs):
  data=ROOT/'app/build/visual-input'
+ if not data.is_dir(): data=ROOT/'build/visual-input'
  raw=(data/'earth.vertices').read_bytes(); vertices=struct.unpack('>'+str(len(raw)//4)+'f',raw)
  raw=(data/'earth.indices').read_bytes(); indices=struct.unpack('>'+str(len(raw)//2)+'H',raw)
  assets=ROOT/'app/src/main/res/drawable-nodpi'

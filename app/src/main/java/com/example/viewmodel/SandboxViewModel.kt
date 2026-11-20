@@ -425,6 +425,11 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
         syncConfigImmediate()
     }
 
+    fun toggleCinematicBlackHoles() {
+        engine.updateConfig { it.copy(cinematicBlackHoles = !it.cinematicBlackHoles) }
+        syncConfigImmediate()
+    }
+
     fun toggleTrueScale() {
         engine.updateConfig { it.copy(trueScaleMode = !it.trueScaleMode) }
         syncConfigImmediate()

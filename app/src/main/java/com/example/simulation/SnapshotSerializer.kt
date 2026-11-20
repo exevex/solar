@@ -37,6 +37,7 @@ object SnapshotSerializer {
             put("showLabels", snapshot.config.showLabels)
             put("showHabitableZone", snapshot.config.showHabitableZone)
             put("showEventText", snapshot.config.showEventText)
+            put("cinematicBlackHoles", snapshot.config.cinematicBlackHoles)
         }
         root.put("config", cfg)
 
@@ -128,7 +129,8 @@ object SnapshotSerializer {
                 showOrbits = cfgObj.optBoolean("showOrbits", true),
                 showLabels = cfgObj.optBoolean("showLabels", true),
                 showHabitableZone = cfgObj.optBoolean("showHabitableZone", false),
-                showEventText = cfgObj.optBoolean("showEventText", true)
+                showEventText = cfgObj.optBoolean("showEventText", true),
+                cinematicBlackHoles = cfgObj.optBoolean("cinematicBlackHoles", true)
             )
         } else SimulationConfig()
 

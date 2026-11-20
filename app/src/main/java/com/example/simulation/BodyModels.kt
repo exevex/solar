@@ -293,7 +293,9 @@ data class SimulationConfig(
     val showOrbits: Boolean = true,
     val showLabels: Boolean = true,
     val showHabitableZone: Boolean = false,
-    val showEventText: Boolean = true
+    val showEventText: Boolean = true,
+    /** Display-only cinematic fallback; gravity and physical accretion are unchanged. */
+    val cinematicBlackHoles: Boolean = true
 )
 
 data class SimulationSnapshot(
