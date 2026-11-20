@@ -860,7 +860,7 @@ fun EarthMapPreviewCard(
                     }
                 }
                 Text(
-                    "No Earth-like world active in system. Load Solar System or spawn an Oceanic Terra planet.",
+                    "No Earth-like world active. Load Solar System or spawn Earth (NASA / WGS84).",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary
                 )
@@ -902,7 +902,7 @@ fun EarthMapPreviewCard(
                     border = BorderStroke(1.dp, climateAccent.copy(alpha = 0.65f))
                 ) {
                     Text(
-                        text = "${metrics.habitabilityPct}% Hab",
+                        text = "${metrics.habitabilityPct}% sim score",
                         style = MaterialTheme.typography.labelSmall,
                         color = climateAccent,
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -924,6 +924,11 @@ fun EarthMapPreviewCard(
                     .aspectRatio(2.0f)
                     .clip(RoundedCornerShape(8.dp))
                     .border(1.dp, HairlineBorder, RoundedCornerShape(8.dp))
+            )
+            Text(
+                if (earthBody.surfaceAssetKey == "earth") "NASA Blue Marble • WGS84 globe • GEBCO relief. Climate overlays are approximate."
+                else "Fictional exoplanet surface; not observed Earth geography.",
+                style = MaterialTheme.typography.labelSmall, color = TextSecondary
             )
 
             Row(

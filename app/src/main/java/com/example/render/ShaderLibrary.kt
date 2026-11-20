@@ -282,6 +282,7 @@ object ShaderLibrary {
         in vec2 vUv;
 
         uniform sampler2D uEarthTex;
+        uniform sampler2D uEarthNightTex;
         uniform sampler2D uObservedSurfaceTex;
         uniform int uUseObservedSurface;
         uniform vec3 uCamPos;
@@ -347,17 +348,10 @@ object ShaderLibrary {
         // Scale-invariant height evaluator in local sphere space for crisp 3D bump normals
         float evalTerrainHeight(vec3 q) {
             if (uBodyArchetype == 5) {
-                float eu = atan(q.z, q.x) / 6.2831853 + 0.5;
+                float eu = atan(-q.z, q.x) / 6.2831853 + 0.5;
                 float ev = 0.5 - asin(clamp(q.y, -1.0, 1.0)) / 3.14159265;
-                float macro;
-                if (uUseObservedSurface == 1) {
-                    vec3 observed = texture(uObservedSurfaceTex, vec2(eu, ev)).rgb;
-                    macro = dot(observed, vec3(0.2126, 0.7152, 0.0722));
-                } else {
-                    macro = texture(uEarthTex, vec2(eu, ev)).r;
-                }
-                float micro = fbm(q * 14.0 + vec3(uSeed), 3);
-                return macro + (micro - 0.5) * 0.12;
+                // Elevation is independent of visible brightness: snow is not a mountain.
+                return texture(uEarthTex, vec2(eu, ev)).r;
             } else if (uBodyArchetype == 6) {
                 float hi = fbm(q * 3.4 + vec3(7.21), 3);
                 float c = craterField(q, 9.0, 6.0);
@@ -422,25 +416,35 @@ object ShaderLibrary {
             float gasThermal = clamp((uTempK - 550.0) / 1200.0, 0.0, 1.0);
             float cloudShadow = 1.0;
 
-            if (uBodyArchetype == 5 || uPlanetStyle == 0) {
-                // REAL-WORLD NASA EARTH (5) via equirectangular EarthGeography texture + 3D micro-detail,
-                // OR procedural Oceanic Exoplanet (0) with live freeze/boil/magma climate response!
+            if (uBodyArchetype == 5 && uUseObservedSurface == 1) {
+                // Direct NASA Blue Marble. UVs are geodetic, north-first and shared
+                // with the measured WGS84/GEBCO mesh and the 2-D surface preview.
+                baseColor = texture(uObservedSurfaceTex, vUv).rgb;
+                float ocean = (baseColor.b > baseColor.r * 1.25 && baseColor.b > baseColor.g * 1.08) ? 1.0 : 0.0;
+                float snow = freezeShift * smoothstep(0.05, 0.65, abs(p.y) + freezeShift * 0.65);
+                baseColor = mix(baseColor, vec3(0.88, 0.93, 0.97), snow);
+                baseColor = mix(baseColor, vec3(0.42, 0.22, 0.13), heatDry * 0.65);
+                roughness = mix(0.86, 0.22, ocean * (1.0 - snow));
+                specStrength = mix(0.025, 0.42, ocean * (1.0 - snow));
+                if (uHasCityLights == 1) {
+                    cityMask = texture(uEarthNightTex, vUv).r *
+                        (1.0 - snow) * (1.0 - clamp(uCrustHeat * 3.0, 0.0, 1.0));
+                    cityMask *= 1.0 - smoothstep(335.0, 390.0, uTempK);
+                }
+                if (uHasClouds == 1 && uAtmoDensity > 0.05) {
+                    vec3 cPos = p * 4.4 + vec3(uTime * 0.012, 0.0, -uTime * 0.008);
+                    float weather = fbm(cPos + vec3(fbm(cPos * 1.6, 2)), uFbmOctaves);
+                    cloudAlpha = smoothstep(0.48, 0.70, weather) * min(0.78, uAtmoDensity);
+                    cloudShadow = 1.0 - cloudAlpha * 0.24;
+                }
+            } else if (uPlanetStyle == 0) {
+                // Fictional, user-created oceanic exoplanets only; never alter Earth's coastlines.
                 float detail = fbm(p * 13.0 + vec3(uSeed * 2.1), max(2, uFbmOctaves - 1));
                 float ridge = 1.0 - abs(noise3(p * 18.0 + vec3(uSeed)) * 2.0 - 1.0);
                 float lat = abs(p.y);
 
-                float cont;
-                float landThresh;
-                if (uBodyArchetype == 5) {
-                    float earthU = atan(p.z, p.x) / 6.2831853 + 0.5;
-                    float earthV = 0.5 - asin(clamp(p.y, -1.0, 1.0)) / 3.14159265;
-                    float macroH = texture(uEarthTex, vec2(earthU, earthV)).r;
-                    cont = macroH + (detail - 0.5) * 0.08 + (ridge - 0.5) * 0.04;
-                    landThresh = 0.47 + boilOcean * 0.25;
-                } else {
-                    cont = fbm(p * 2.65 + vec3(uSeed), uFbmOctaves) + (detail - 0.5) * 0.08;
-                    landThresh = 0.49 + boilOcean * 0.24;
-                }
+                float cont = fbm(p * 2.65 + vec3(uSeed), uFbmOctaves) + (detail - 0.5) * 0.08;
+                float landThresh = 0.49 + boilOcean * 0.24;
 
                 // Dynamic polar & global snowball freeze threshold driven by uTempK!
                 float iceThresh = 0.77 - freezeShift * 0.74;
@@ -677,8 +681,9 @@ object ShaderLibrary {
             }
 
             // Replace invented layouts with the packaged observation-based maps for named bodies.
-            if (uUseObservedSurface == 1) {
-                vec3 observed = texture(uObservedSurfaceTex, vec2(vUv.x, 1.0 - vUv.y)).rgb;
+            if (uUseObservedSurface == 1 && uBodyArchetype != 5) {
+                // Android bitmaps upload north-first; flipping v inverted hemispheres.
+                vec3 observed = texture(uObservedSurfaceTex, vUv).rgb;
                 float mapWeight = (uBodyArchetype == 5)
                     ? mix(0.48, 0.94, smoothstep(180.0, 270.0, uTempK))
                     : 0.94;
@@ -711,7 +716,7 @@ object ShaderLibrary {
             float h0 = evalTerrainHeight(p);
             float hx = evalTerrainHeight(normalize(p + T_loc * eps));
             float hy = evalTerrainHeight(normalize(p + B_loc * eps));
-            float bumpScale = (uPlanetStyle == 2 || uPlanetStyle == 3) ? 0.30 : 2.15;
+            float bumpScale = (uBodyArchetype == 5) ? 0.08 : ((uPlanetStyle == 2 || uPlanetStyle == 3) ? 0.30 : 2.15);
             vec3 wUp = abs(N.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
             vec3 T_w = normalize(cross(wUp, N));
             vec3 B_w = cross(N, T_w);

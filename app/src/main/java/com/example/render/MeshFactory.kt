@@ -80,7 +80,19 @@ object MeshFactory {
             }
         }
 
+        // Old indices faced inward, exposing the mirrored far interior hemisphere.
+        for (triangle in indices.indices step 3) {
+            val swap = indices[triangle + 1]
+            indices[triangle + 1] = indices[triangle + 2]
+            indices[triangle + 2] = swap
+        }
         return uploadInterleavedMesh(vertices, indices, hasNormalsAndUv = true)
+    }
+
+    fun createEarth(latBands: Int, lonBands: Int): GlMesh {
+        val data = com.example.simulation.EarthGeometry.mesh(latBands, lonBands,
+            com.example.simulation.EarthGeography::elevationKmAt)
+        return uploadInterleavedMesh(data.vertices, data.indices, hasNormalsAndUv = true)
     }
 
     /**

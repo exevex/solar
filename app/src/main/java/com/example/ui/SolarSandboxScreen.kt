@@ -23,6 +23,7 @@ import com.example.viewmodel.SandboxViewModel
 fun SolarSandboxScreen(viewModel: SandboxViewModel) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val appContext = LocalContext.current.applicationContext
+    remember(appContext) { com.example.simulation.EarthGeography.initialize(appContext) }
     val copilotContext = remember(uiState.currentPreset, uiState.elapsedYears, uiState.config, uiState.selectedTelemetry, uiState.bodyCount) {
         buildString {
             appendLine("Preset: ${uiState.currentPreset.title}; simulated time: ${uiState.elapsedYears} years; bodies: ${uiState.bodyCount}.")

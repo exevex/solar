@@ -1,6 +1,18 @@
 # Observation-based body assets
 
-The renderer maps packaged equirectangular surface imagery onto UV-sphere geometry for named Solar-System bodies. These are surface maps, not mission-derived triangle meshes or fully measured elevation models. In True Astronomical Scale mode the sphere uses the body's physical radius; Sandbox Clear View intentionally enlarges displayed radii. Unmapped/user-created bodies use procedural shading. For mobile GPU memory, source images are decoded at up to 1024 pixels on the longest edge; the packaged source files listed below remain unchanged.
+Earth is now a geodetic WGS84 ellipsoid mesh (180×360 cells, 65,341 vertices) with sampled GEBCO land relief in kilometres and no terrain exaggeration. North-up UVs and outward triangle winding are shared by the globe and the 2-D preview. Other named bodies remain mapped UV spheres. True Scale uses physical radii; Sandbox Clear View deliberately enlarges display radii. Other-world textures decode at up to 1024 pixels, while Earth uses up to 4096 pixels and night lights up to 2048, bounded by the GPU's limit.
+
+## Earth geometry and independent raster layers
+
+The exact downloads, source/final SHA-256 values, transformations, credit and epoch are packaged in `app/src/main/assets/earth_sources.json`.
+
+- Surface: NASA Terra MODIS Blue Marble Next Generation, September 2004, cloud-free base map (not the version with baked relief shadows). Reto Stöckli et al.; NASA Earth Observatory. Original 5400×2700 JPEG resized to 4096×2048. [Dataset description and projection](https://assets.science.nasa.gov/content/dam/science/esd/eo/content-feature/bluemarble/bmng.pdf).
+- Shape: [NGA WGS84 ellipsoid](https://earth-info.nga.mil/index.php?action=wgs84&dir=wgs84), equatorial semi-axis 6378.137 km, inverse flattening 298.257223563. Vertices use geodetic latitude; east maps to -Z in the app's right-handed Y-up frame.
+- Relief: [NASA GEBCO_08 topography visualization](https://science.nasa.gov/earth/earth-observatory/blue-marble-next-generation/topography-bathymetry-maps/), Jesse Allen / NASA Earth Observatory, GEBCO / British Oceanographic Data Centre. Downloaded 5400×2700 visualization is scaled 0–6400 m; resized to 2048×1024 and sampled onto the ellipsoid. This is quantized, clipped globe-scale relief, not a survey-resolution DEM. Orthometric/geoid heights are approximated as radial height; no bathymetric seafloor mesh is included.
+- Night lights: NASA VIIRS Black Marble 2016 grayscale composite, resized to 2048×1024; static observed light distribution, not invented city noise or live lights.
+- [NASA imagery usage guidelines](https://www.nasa.gov/nasa-brand-center/images-and-media/). No NASA endorsement is implied. JPEG decoding/resizing changes pixel values slightly; seasonal imagery and clipped elevation are not a current or perfectly complete reconstruction.
+- Clouds remain explicitly procedural weather illustrations. Edited freezing, heating and impacts are simulation overlays and are not observed climate predictions. Ocean/ice percentages are area-weighted image classifications, not authoritative land-cover products.
+- The legacy `surface_earth.jpg` checksum below is retained for provenance only; it is no longer bound to Earth. Named Earth and the spawn option `Earth (NASA / WGS84)` both use the same stable asset key, retained across rename and save/load.
 
 ## Sources
 

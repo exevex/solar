@@ -99,7 +99,7 @@ object SpawnCatalog {
     val all: List<SpawnTemplate> = listOf(
         // Planets & Moons
         SpawnTemplate(
-            "earth_like", "Oceanic Terra", SpawnCategory.PLANETS, BodyType.EARTH_LIKE,
+            "earth_like", "Earth (NASA / WGS84)", SpawnCategory.PLANETS, BodyType.EARTH_LIKE,
             massSolar = AstroConstants.EARTH_MASS_SOLAR, radiusKm = 6371.0, temperatureK = 288.0,
             atmosphereDensity = 0.65f, atmosphereColor = Triple(0.28f, 0.65f, 1.0f),
             albedoColor = Triple(0.20f, 0.48f, 0.82f), hasClouds = true
@@ -609,11 +609,14 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
             radiusKm = tpl.radiusKm,
             temperatureK = tpl.temperatureK,
             luminositySolar = tpl.luminositySolar,
+            rotationPeriodHours = if (archetype == BodyArchetype.EARTH) 23.934 else 24.0,
+            axialTiltDeg = if (archetype == BodyArchetype.EARTH) 23.44 else 0.0,
             atmosphereDensity = tpl.atmosphereDensity,
             atmosphereColor = tpl.atmosphereColor,
             albedoColor = tpl.albedoColor,
             seed = rng.nextFloat() * 100f,
             hasClouds = tpl.hasClouds,
+            hasCityLights = archetype == BodyArchetype.EARTH,
             ringSystem = tpl.ringSystem,
             accretionActivity = 0.0f,
             evolutionStage = if (tpl.type.isLuminous) EvolutionStage.MAIN_SEQUENCE else EvolutionStage.NONE

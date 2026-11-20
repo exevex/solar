@@ -320,6 +320,7 @@ class SolarPhysicsTest {
 
     @Test
     fun `live Earth geography map responds to temperature changes`() {
+        EarthGeography.initialize(ApplicationProvider.getApplicationContext<Context>())
         val baseEarth = SolarSystemPresets.buildPreset(SystemPreset.SOLAR_SYSTEM).bodies.first { it.name == "Earth" }
         val (_, temperate) = EarthGeography.renderLiveEarthMap(baseEarth)
         val (_, frozen) = EarthGeography.renderLiveEarthMap(baseEarth.copy(temperatureK = 175.0))

@@ -159,7 +159,9 @@ data class CelestialBody(
     val tidalStretchDir: Vec3d = Vec3d(1.0, 0.0, 0.0),
     val tidalStretchAmount: Float = 0f,
     val tidalTargetBhId: Long? = null,
-    val isBackgroundCluster: Boolean = false
+    val isBackgroundCluster: Boolean = false,
+    /** Stable imagery identity; copy/rename retains the same measured Earth geometry. */
+    val surfaceAssetKey: String? = if (archetype == BodyArchetype.EARTH || name.equals("Earth", true)) "earth" else null
 ) {
     val physicsRadiusAu: Double
         get() = (radiusKm / AstroConstants.AU_KM).coerceAtLeast(1e-7)

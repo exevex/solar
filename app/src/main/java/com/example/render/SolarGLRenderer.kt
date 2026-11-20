@@ -46,6 +46,8 @@ class SolarGLRenderer(
     @Volatile var cinematicMode: Boolean = false
 
     @Volatile var graphicsSettings: GraphicsSettings = GraphicsSettings()
+    /** Selectable appearance only; never changes black-hole mass or simulated disk bins. */
+    @Volatile var blackHoleLook: BlackHoleLook = BlackHoleLook.INTERSTELLAR_CINEMATIC
     @Volatile var slingshotPreview: SlingshotPreview? = null
     @Volatile var spawnPreviewPos: Vec3d? = null
     @Volatile var spawnPreviewRadiusAu: Float = 0.025f
@@ -95,6 +97,7 @@ class SolarGLRenderer(
     private lateinit var sphereLod0: GlMesh
     private lateinit var sphereLod1: GlMesh
     private lateinit var sphereLod2: GlMesh
+    private lateinit var earthMesh: GlMesh
     private lateinit var asteroidMesh: GlMesh
     private lateinit var annulusMesh: GlMesh
     private lateinit var quadMesh: GlMesh
@@ -132,6 +135,7 @@ class SolarGLRenderer(
     private val particleBuf: FloatBuffer = ByteBuffer.allocateDirect(maxParticles * 7 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
+        EarthGeography.initialize(context.applicationContext)
         GLES30.glClearColor(0.01f, 0.015f, 0.03f, 1f)
         GLES30.glEnable(GLES30.GL_DEPTH_TEST)
         GLES30.glEnable(GLES30.GL_CULL_FACE)
@@ -141,7 +145,7 @@ class SolarGLRenderer(
         planetProg = GlShaderProgram.compile(ShaderLibrary.PLANET_VS, ShaderLibrary.PLANET_FS, "Planet")
         starProg = GlShaderProgram.compile(ShaderLibrary.STAR_VS, ShaderLibrary.STAR_FS, "Star")
         coronaProg = GlShaderProgram.compile(ShaderLibrary.CORONA_VS, ShaderLibrary.CORONA_FS, "Corona")
-        bhRelativisticProg = GlShaderProgram.compile(ShaderLibrary.BH_RELATIVISTIC_VS, ShaderLibrary.BH_RELATIVISTIC_FS, "BHRel")
+        bhRelativisticProg = GlShaderProgram.compile(BlackHoleShaders.VERTEX, BlackHoleShaders.FRAGMENT, "BHRel")
         habitableZoneProg = GlShaderProgram.compile(ShaderLibrary.HABITABLE_ZONE_VS, ShaderLibrary.HABITABLE_ZONE_FS, "HabZone")
         bhJetProg = GlShaderProgram.compile(ShaderLibrary.CORONA_VS, ShaderLibrary.BH_JET_FS, "BHJet")
         ringProg = GlShaderProgram.compile(ShaderLibrary.RING_VS, ShaderLibrary.RING_FS, "Ring")
@@ -178,6 +182,7 @@ class SolarGLRenderer(
         sphereLod0 = MeshFactory.createSphere(46, 68)
         sphereLod1 = MeshFactory.createSphere(24, 34)
         sphereLod2 = MeshFactory.createSphere(12, 16)
+        earthMesh = MeshFactory.createEarth(180, 360)
         asteroidMesh = MeshFactory.createAsteroidRock()
         annulusMesh = MeshFactory.createAnnulus(96)
         quadMesh = MeshFactory.createQuad()
@@ -419,7 +424,9 @@ class SolarGLRenderer(
             // Pick sphere LOD by angular size
             val camDist = sqrt((rx - eyeX) * (rx - eyeX) + (ry - eyeY) * (ry - eyeY) + (rz - eyeZ) * (rz - eyeZ)).coerceAtLeast(1e-4f)
             val angSize = rad / camDist
+            val isMeasuredEarth = SurfaceTextureLibrary.keyForBody(b) == "earth"
             val mesh = when {
+                isMeasuredEarth -> earthMesh
                 angSize > 0.045f -> sphereLod0
                 angSize > 0.012f -> sphereLod1
                 else -> sphereLod2
@@ -476,6 +483,9 @@ class SolarGLRenderer(
                     GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, surfaceTexture ?: 0)
                     planetProg.setInt("uObservedSurfaceTex", 1)
                     planetProg.setInt("uUseObservedSurface", if (surfaceTexture != null) 1 else 0)
+                    GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
+                    GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, surfaceTextures["earth_night"] ?: 0)
+                    planetProg.setInt("uEarthNightTex", 2)
                     planetProg.setMat4("uModel", modelMatrix)
                     planetProg.setMat4("uViewProj", viewProjMatrix)
                     planetProg.setFloat("uLogDepthCoef", logDepthCoef)
@@ -498,7 +508,7 @@ class SolarGLRenderer(
                         else -> 1
                     }
                     planetProg.setInt("uPlanetStyle", style)
-                    planetProg.setInt("uBodyArchetype", b.archetype.shaderId)
+                    planetProg.setInt("uBodyArchetype", if (isMeasuredEarth) BodyArchetype.EARTH.shaderId else b.archetype.shaderId)
                     planetProg.setFloat("uSeed", b.seed)
                     planetProg.setFloat("uTime", animTimeSec)
                     planetProg.setFloat("uTempK", b.temperatureK.toFloat())

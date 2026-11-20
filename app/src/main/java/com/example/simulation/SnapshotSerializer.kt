@@ -47,6 +47,7 @@ object SnapshotSerializer {
                 put("name", b.name)
                 put("type", b.type.name)
                 put("archetype", b.archetype.name)
+                b.surfaceAssetKey?.let { put("surfaceAssetKey", it) }
                 put("spectralClass", b.spectralClass.name)
                 put("px", b.pos.x); put("py", b.pos.y); put("pz", b.pos.z)
                 put("vx", b.vel.x); put("vy", b.vel.y); put("vz", b.vel.z)
@@ -221,7 +222,10 @@ object SnapshotSerializer {
                             if (idx < arr.length()) arr.optDouble(idx, 0.0).toFloat() else 0f
                         }
                     } ?: listOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f),
-                    isBackgroundCluster = bj.optBoolean("isBackgroundCluster", false)
+                    isBackgroundCluster = bj.optBoolean("isBackgroundCluster", false),
+                    surfaceAssetKey = if (bj.has("surfaceAssetKey") && !bj.isNull("surfaceAssetKey")) {
+                        bj.getString("surfaceAssetKey")
+                    } else if (bj.optString("archetype") == "EARTH" || bj.getString("name").equals("Earth", true)) "earth" else null
                 )
             )
         }

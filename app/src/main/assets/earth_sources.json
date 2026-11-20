@@ -1,0 +1,47 @@
+[
+  {
+    "role": "day",
+    "source": "https://assets.science.nasa.gov/content/dam/science/esd/eo/images/bmng/bmng-base/september/world.200409.3x5400x2700.jpg",
+    "credit": "NASA Earth Observatory; Reto Stockli et al. MODIS BMNG September 2004 cloud-free surface composite, no precomputed relief shading",
+    "projection": "equirectangular; west=-180, east=180; north=90 at row 0, south=-90",
+    "size": [
+      4096,
+      2048
+    ],
+    "transform": "Lanczos resize; JPEG quality 2 for jpg; grayscale elevation PNG; no flipping or synthetic continent fill",
+    "source_sha256": "ed72e87674861f72e2a6e5df52f0cc6bf3df1edd9b862664cf18ac423e2e9e0e",
+    "packaged_file": "earth_blue_marble.jpg",
+    "sha256": "2a4f6908194ee0a1c6c43fca3c92914cfe4e4922a421a0692d3b10a9996c8f9c",
+    "usage_guidelines": "https://www.nasa.gov/nasa-brand-center/images-and-media/"
+  },
+  {
+    "role": "height",
+    "source": "https://assets.science.nasa.gov/content/dam/science/esd/eo/images/bmng/topography/gebco_08_rev_elev_5400x2700.jpg",
+    "credit": "NASA Earth Observatory; Jesse Allen; GEBCO_08 land elevation visualization, 0..6400 m mapped to 0..255, clipped and quantized",
+    "projection": "equirectangular; west=-180, east=180; north=90 at row 0, south=-90",
+    "size": [
+      2048,
+      1024
+    ],
+    "transform": "Lanczos resize; JPEG quality 2 for jpg; grayscale elevation PNG; no flipping or synthetic continent fill",
+    "source_sha256": "97828a87bcb6549a527232455e478c5f9e4556f761b37d620a46446da17593ab",
+    "packaged_file": "earth_elevation.png",
+    "sha256": "581a135c70165d6af64c36548a67198ee235cc67e18c5a366709da672d21be89",
+    "usage_guidelines": "https://www.nasa.gov/nasa-brand-center/images-and-media/"
+  },
+  {
+    "role": "night",
+    "source": "https://assets.science.nasa.gov/content/dam/science/esd/eo/images/imagerecords/144000/144897/BlackMarble_2016_01deg_gray.jpg",
+    "credit": "NASA Earth Observatory; Black Marble VIIRS 2016 grayscale composite; static lights, not live",
+    "projection": "equirectangular; west=-180, east=180; north=90 at row 0, south=-90",
+    "size": [
+      2048,
+      1024
+    ],
+    "transform": "Lanczos resize; JPEG quality 2 for jpg; grayscale elevation PNG; no flipping or synthetic continent fill",
+    "source_sha256": "4d2158f59123dadf0696a1cf8909c45018a1de8d0daab40da04122a5aa7f27c6",
+    "packaged_file": "earth_night_lights.jpg",
+    "sha256": "51e387636a930ace28a8a1b1d5a1c1e5f80f50cd150e7a6bd4af150087a08e62",
+    "usage_guidelines": "https://www.nasa.gov/nasa-brand-center/images-and-media/"
+  }
+]

@@ -75,6 +75,23 @@ jobs:
         id: lint
         run: ./gradlew :app:lintDebug --no-daemon --stacktrace -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8"
 
+      - name: Render actual GLES shaders and verify globe landmarks
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libegl1 libgles2 ffmpeg
+          python3 tests/render_visuals.py
+
+      - name: Upload visual verification previews
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Solar-Sandbox-visual-verification
+          path: build/visuals/
+          if-no-files-found: ignore
+
       - name: Verify APK signature, package metadata, and checksum
         run: |
           APK="app/build/outputs/apk/debug/app-debug.apk"
