@@ -10,12 +10,14 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 import java.io.DataOutputStream
 import java.io.File
 import kotlin.math.abs
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class EarthVisualsTest {
     @Test fun `cinematic disk appearance persists without changing gravity`() {
         for (enabled in listOf(false, true)) {
