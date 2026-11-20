@@ -50,7 +50,12 @@ object SurfaceTextureLibrary {
         val loaded = LinkedHashMap<String, Int>()
         val ids = IntArray(1)
         for ((key, resourceId) in resourceByKey) {
-            val bitmap = BitmapFactory.decodeResource(context.resources, resourceId) ?: continue
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeResource(context.resources, resourceId, bounds)
+            var sample = 1
+            while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 1024) sample *= 2
+            val bitmap = BitmapFactory.decodeResource(context.resources, resourceId,
+                BitmapFactory.Options().apply { inSampleSize = sample }) ?: continue
             GLES30.glGenTextures(1, ids, 0)
             val textureId = ids[0]
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)

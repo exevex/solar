@@ -10,11 +10,18 @@
     <string name="cd_close_panel">Close panel</string>
     <string name="cd_toggle_trails">Toggle orbit trails</string>
     <string name="cd_toggle_labels">Toggle object labels</string>
+    <string name="cd_toggle_habitable_zone">Toggle habitable zone view</string>
+    <string name="cd_earth_map">Toggle live Earth surface map</string>
     <string name="cd_focus_body">Focus camera on selected object</string>
     <string name="cd_delete_body">Delete selected object</string>
     <string name="cd_mode_select">Select and orbit mode</string>
+    <string name="cd_mode_drag">Drag and fling objects mode</string>
     <string name="cd_mode_spawn">Spawn celestial bodies</string>
     <string name="cd_mode_slingshot">Slingshot launch mode</string>
     <string name="cd_mode_weapons">Cosmic weapons and events</string>
+    <string name="cd_mode_collide">Planetary collision lab</string>
     <string name="cd_mode_edit">Inspect and edit selected object</string>
+    <string name="cd_cinematic_replay">Replay collision sequence</string>
+    <string name="cd_cinematic_exit">Exit cinematic camera</string>
+    <string name="cd_place_here">Confirm placement at aimed location</string>
 </resources>

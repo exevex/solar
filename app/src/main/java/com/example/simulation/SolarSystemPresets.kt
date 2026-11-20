@@ -63,6 +63,7 @@ object SolarSystemPresets {
         data class PlanetSpec(
             val name: String,
             val type: BodyType,
+            val archetype: BodyArchetype,
             val massEarth: Double,
             val radiusKm: Double,
             val a: Double,
@@ -85,59 +86,59 @@ object SolarSystemPresets {
 
         val specs = listOf(
             PlanetSpec(
-                "Mercury", BodyType.TERRESTRIAL_PLANET, 0.0553, 2439.7,
+                "Mercury", BodyType.TERRESTRIAL_PLANET, BodyArchetype.MERCURY, 0.0553, 2439.7,
                 0.387098, 0.20563, 7.005, 29.124, 48.331, 174.796,
                 440.0, 1407.6, 0.034, 0f, Triple(0f, 0f, 0f),
                 Triple(0.58f, 0.54f, 0.50f), 1.7f
             ),
             PlanetSpec(
-                "Venus", BodyType.TERRESTRIAL_PLANET, 0.815, 6051.8,
+                "Venus", BodyType.TERRESTRIAL_PLANET, BodyArchetype.VENUS, 0.815, 6051.8,
                 0.723332, 0.00677, 3.395, 54.884, 76.680, 50.115,
                 737.0, -5832.5, 177.36, 0.95f, Triple(0.95f, 0.78f, 0.42f),
                 Triple(0.88f, 0.74f, 0.46f), 2.9f, clouds = true
             ),
             PlanetSpec(
-                "Earth", BodyType.EARTH_LIKE, 1.0, 6371.0,
+                "Earth", BodyType.EARTH_LIKE, BodyArchetype.EARTH, 1.0, 6371.0,
                 1.000001, 0.01671, 0.000, 114.208, -11.26, 358.617,
                 288.0, 23.934, 23.44, 0.65f, Triple(0.28f, 0.62f, 1.0f),
                 Triple(0.20f, 0.48f, 0.82f), 4.13f, clouds = true, cityLights = true
             ),
             PlanetSpec(
-                "Mars", BodyType.TERRESTRIAL_PLANET, 0.107, 3389.5,
+                "Mars", BodyType.TERRESTRIAL_PLANET, BodyArchetype.MARS, 0.107, 3389.5,
                 1.523679, 0.09341, 1.850, 286.502, 49.558, 19.373,
-                210.0, 24.623, 25.19, 0.14f, Triple(0.85f, 0.48f, 0.30f),
+                210.0, 24.623, 25.19, 0.16f, Triple(0.88f, 0.48f, 0.30f),
                 Triple(0.76f, 0.34f, 0.21f), 7.21f
             ),
             PlanetSpec(
-                "Jupiter", BodyType.GAS_GIANT, 317.83, 69911.0,
+                "Jupiter", BodyType.GAS_GIANT, BodyArchetype.JUPITER, 317.83, 69911.0,
                 5.2044, 0.0489, 1.303, 273.867, 100.464, 20.020,
                 165.0, 9.925, 3.13, 0.40f, Triple(0.82f, 0.68f, 0.50f),
                 Triple(0.84f, 0.66f, 0.48f), 11.4f
             ),
             PlanetSpec(
-                "Saturn", BodyType.GAS_GIANT, 95.159, 58232.0,
+                "Saturn", BodyType.GAS_GIANT, BodyArchetype.SATURN, 95.159, 58232.0,
                 9.5826, 0.0565, 2.485, 339.392, 113.665, 317.020,
                 134.0, 10.656, 26.73, 0.35f, Triple(0.88f, 0.78f, 0.58f),
                 Triple(0.88f, 0.78f, 0.56f), 15.8f,
                 rings = RingSystem(1.28f, 2.38f, 0.86f, 0.79f, 0.66f, 0.88f, hasCassiniGap = true)
             ),
             PlanetSpec(
-                "Uranus", BodyType.ICE_GIANT, 14.536, 25362.0,
+                "Uranus", BodyType.ICE_GIANT, BodyArchetype.URANUS, 14.536, 25362.0,
                 19.19126, 0.04717, 0.773, 96.998, 74.006, 142.238,
                 76.0, -17.24, 97.77, 0.50f, Triple(0.48f, 0.86f, 0.92f),
                 Triple(0.55f, 0.85f, 0.90f), 19.3f,
                 rings = RingSystem(1.55f, 1.95f, 0.60f, 0.76f, 0.85f, 0.32f, hasCassiniGap = false)
             ),
             PlanetSpec(
-                "Neptune", BodyType.ICE_GIANT, 17.147, 24622.0,
+                "Neptune", BodyType.ICE_GIANT, BodyArchetype.NEPTUNE, 17.147, 24622.0,
                 30.07, 0.00859, 1.770, 273.187, 131.784, 256.228,
                 72.0, 16.11, 28.32, 0.55f, Triple(0.24f, 0.48f, 0.95f),
                 Triple(0.22f, 0.44f, 0.88f), 23.7f
             ),
             PlanetSpec(
-                "Pluto", BodyType.DWARF_PLANET, 0.00218, 1188.3,
+                "Pluto", BodyType.DWARF_PLANET, BodyArchetype.PLUTO, 0.00218, 1188.3,
                 39.482, 0.2488, 17.16, 113.834, 110.299, 14.53,
-                44.0, -153.3, 122.53, 0.04f, Triple(0.65f, 0.72f, 0.85f),
+                44.0, -153.3, 122.53, 0.05f, Triple(0.65f, 0.72f, 0.85f),
                 Triple(0.72f, 0.63f, 0.55f), 29.1f
             )
         )
@@ -155,19 +156,15 @@ object SolarSystemPresets {
                 argPeriapsisDeg = p.omega,
                 meanAnomalyDeg = p.m0
             )
-            // Replace the analytic fallback with a real DE441/JPL Horizons J2000 state
-            // whenever a tracked Solar-System body has a published ephemeris vector.
-            JplHorizonsJ2000.state(p.name)?.let { state ->
-                val sunState = JplHorizonsJ2000.state("Sun")
-                if (sunState != null) {
-                    pos = state.position - sunState.position
-                    vel = state.velocityAuPerYear - sunState.velocityAuPerYear
-                }
-            }
+            // Use the DE441/JPL J2000 heliocentric state for tracked bodies.
+            // Keep the orbital-elements state as a deterministic fallback.
+            JplHorizonsJ2000.heliocentricPosition(p.name)?.let { pos = it }
+            JplHorizonsJ2000.heliocentricVelocity(p.name)?.let { vel = it }
             val body = CelestialBody(
                 id = allocateId(),
                 name = p.name,
                 type = p.type,
+                archetype = p.archetype,
                 pos = pos,
                 vel = vel,
                 massSolar = massSolar,
@@ -188,11 +185,11 @@ object SolarSystemPresets {
             planetIds[p.name] = body
         }
 
-        // Major moons use their physical barycentric orbital distances; enhanced planet rendering
-        // never changes the simulated orbit.
+        // Major Moons (distances scaled gently above enhanced planet visual radius so moons never start inside enhanced spheres!)
         fun addMoon(
             parentName: String,
             name: String,
+            archetype: BodyArchetype,
             massEarth: Double,
             radiusKm: Double,
             realSemiMajorKm: Double,
@@ -219,18 +216,14 @@ object SolarSystemPresets {
                 parentPos = parent.pos,
                 parentVel = parent.vel
             )
-            JplHorizonsJ2000.state(name)?.let { state ->
-                val sunState = JplHorizonsJ2000.state("Sun")
-                if (sunState != null) {
-                    pos = state.position - sunState.position
-                    vel = state.velocityAuPerYear - sunState.velocityAuPerYear
-                }
-            }
+            JplHorizonsJ2000.heliocentricPosition(name)?.let { pos = it }
+            JplHorizonsJ2000.heliocentricVelocity(name)?.let { vel = it }
             bodies.add(
                 CelestialBody(
                     id = allocateId(),
                     name = name,
                     type = BodyType.MOON,
+                    archetype = archetype,
                     pos = pos,
                     vel = vel,
                     massSolar = massSolar,
@@ -245,20 +238,20 @@ object SolarSystemPresets {
         }
 
         // Earth's Moon
-        addMoon("Earth", "Moon", 0.0123, 1737.4, 384_400.0, 0.0549, 5.145, 45.0, 220.0, Triple(0.68f, 0.68f, 0.66f), 31.2f)
+        addMoon("Earth", "Moon", BodyArchetype.LUNA, 0.0123, 1737.4, 384_400.0, 0.0549, 5.145, 45.0, 220.0, Triple(0.68f, 0.68f, 0.66f), 31.2f)
         // Mars Moons
-        addMoon("Mars", "Phobos", 1.78e-9, 11.27, 9376.0, 0.0151, 1.09, 120.0, 233.0, Triple(0.45f, 0.40f, 0.36f), 33.4f)
-        addMoon("Mars", "Deimos", 2.47e-10, 6.2, 23463.0, 0.0003, 1.79, 260.0, 233.0, Triple(0.48f, 0.44f, 0.39f), 34.8f)
+        addMoon("Mars", "Phobos", BodyArchetype.GENERIC_ROCK, 1.78e-9, 11.27, 9376.0, 0.0151, 1.09, 120.0, 233.0, Triple(0.45f, 0.40f, 0.36f), 33.4f)
+        addMoon("Mars", "Deimos", BodyArchetype.GENERIC_ROCK, 2.47e-10, 6.2, 23463.0, 0.0003, 1.79, 260.0, 233.0, Triple(0.48f, 0.44f, 0.39f), 34.8f)
         // Jupiter Galilean Moons
-        addMoon("Jupiter", "Io", 0.01496, 1821.6, 421_700.0, 0.0041, 0.05, 10.0, 110.0, Triple(0.92f, 0.80f, 0.35f), 40.1f)
-        addMoon("Jupiter", "Europa", 0.00804, 1560.8, 671_034.0, 0.009, 0.47, 100.0, 102.0, Triple(0.82f, 0.80f, 0.75f), 41.5f)
-        addMoon("Jupiter", "Ganymede", 0.0248, 2634.1, 1_070_412.0, 0.0013, 0.20, 210.0, 110.0, Triple(0.62f, 0.58f, 0.52f), 42.9f)
-        addMoon("Jupiter", "Callisto", 0.0180, 2410.3, 1_882_709.0, 0.0074, 0.19, 310.0, 134.0, Triple(0.46f, 0.44f, 0.41f), 44.3f)
+        addMoon("Jupiter", "Io", BodyArchetype.IO, 0.01496, 1821.6, 421_700.0, 0.0041, 0.05, 10.0, 110.0, Triple(0.92f, 0.80f, 0.35f), 40.1f)
+        addMoon("Jupiter", "Europa", BodyArchetype.EUROPA, 0.00804, 1560.8, 671_034.0, 0.009, 0.47, 100.0, 102.0, Triple(0.82f, 0.80f, 0.75f), 41.5f)
+        addMoon("Jupiter", "Ganymede", BodyArchetype.GENERIC_ROCK, 0.0248, 2634.1, 1_070_412.0, 0.0013, 0.20, 210.0, 110.0, Triple(0.62f, 0.58f, 0.52f), 42.9f)
+        addMoon("Jupiter", "Callisto", BodyArchetype.GENERIC_ROCK, 0.0180, 2410.3, 1_882_709.0, 0.0074, 0.19, 310.0, 134.0, Triple(0.46f, 0.44f, 0.41f), 44.3f)
         // Saturn Moons (outside rings!)
-        addMoon("Saturn", "Enceladus", 1.8e-5, 252.1, 237_948.0, 0.0047, 0.02, 70.0, 75.0, Triple(0.92f, 0.95f, 0.98f), 51.0f)
-        addMoon("Saturn", "Titan", 0.0225, 2574.7, 1_221_870.0, 0.0288, 0.35, 195.0, 94.0, Triple(0.86f, 0.65f, 0.32f), 52.6f)
+        addMoon("Saturn", "Enceladus", BodyArchetype.ENCELADUS, 1.8e-5, 252.1, 237_948.0, 0.0047, 0.02, 70.0, 75.0, Triple(0.92f, 0.95f, 0.98f), 51.0f)
+        addMoon("Saturn", "Titan", BodyArchetype.TITAN, 0.0225, 2574.7, 1_221_870.0, 0.0288, 0.35, 195.0, 94.0, Triple(0.86f, 0.65f, 0.32f), 52.6f)
         // Neptune Moon
-        addMoon("Neptune", "Triton", 0.00359, 1353.4, 354_759.0, 0.000016, 156.8, 150.0, 38.0, Triple(0.75f, 0.72f, 0.70f), 61.2f)
+        addMoon("Neptune", "Triton", BodyArchetype.GENERIC_ICE, 0.00359, 1353.4, 354_759.0, 0.000016, 156.8, 150.0, 38.0, Triple(0.75f, 0.72f, 0.70f), 61.2f)
 
         // Main Asteroid Belt (180 asteroids between 2.15 and 3.25 AU, rendered via GPU instancing!)
         val rng = Random(2026)
@@ -511,7 +504,7 @@ object SolarSystemPresets {
                 CelestialBody(
                     id = bhId, name = "$namePrefix Core SMBH", type = BodyType.BLACK_HOLE,
                     pos = centerPos, vel = bulkVel, massSolar = smbhMass, radiusKm = 2.95 * smbhMass,
-                    temperatureK = 0.0, accretionActivity = 0.85f, seed = rng.nextFloat() * 100f
+                    temperatureK = 0.0, accretionActivity = 0.0f, seed = rng.nextFloat() * 100f
                 )
             )
             val cosT = cos(Math.toRadians(tiltXDeg))
@@ -584,14 +577,14 @@ object SolarSystemPresets {
             CelestialBody(
                 id = allocateId(), name = "Cygnus BH-Alpha", type = BodyType.BLACK_HOLE,
                 pos = p1, vel = v1, massSolar = m1, radiusKm = 2.95 * m1,
-                temperatureK = 0.0, accretionActivity = 1.0f, seed = 1.0f
+                temperatureK = 0.0, accretionActivity = 0.0f, seed = 1.0f
             )
         )
         bodies.add(
             CelestialBody(
                 id = allocateId(), name = "Cygnus BH-Beta", type = BodyType.BLACK_HOLE,
                 pos = p2, vel = v2, massSolar = m2, radiusKm = 2.95 * m2,
-                temperatureK = 0.0, accretionActivity = 0.9f, seed = 2.0f
+                temperatureK = 0.0, accretionActivity = 0.0f, seed = 2.0f
             )
         )
 

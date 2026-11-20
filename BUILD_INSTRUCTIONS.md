@@ -9,7 +9,7 @@ This repository includes `.github/workflows/android-apk.yml`, which automaticall
 2. Open the **Actions** tab → select **Build Android APK**.
 3. Download **`Solar-Sandbox-debug-apk`** from a **successful** workflow run's **Artifacts** section. It contains `app-debug.apk`, its SHA-256 checksum, signing verification, and package metadata. Test XML/HTML and lint reports are in **`Solar-Sandbox-build-reports`**.
 
-No API keys, `.env`, Firebase configuration, or signing secrets are required for a debug APK. The checked-in Gradle wrapper selects Gradle 9.3.1, and CI installs API 36.1 and Build-Tools 36.0.0 explicitly.
+No API keys, `.env`, Firebase configuration, or signing secrets are required for a debug APK. The optional in-app Gemini science copilot asks the user for a key at runtime, keeps it in memory only, and sends the key, question, recent turns, and selected simulation context directly to Google; the key is not embedded in the APK. The checked-in Gradle wrapper selects Gradle 9.3.1, and CI installs API 36.1 and Build-Tools 36.0.0 explicitly.
 
 #### Debug signing and in-place updates
 

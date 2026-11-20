@@ -2,6 +2,7 @@ package com.example
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.example.ai.GeminiCopilotClient
 import com.example.simulation.*
 import org.junit.Assert.*
 import org.junit.Test
@@ -13,6 +14,22 @@ import kotlin.math.abs
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
 class SolarPhysicsTest {
+
+    @Test
+    fun `science copilot extracts all text parts from Gemini response`() {
+        val response = """{"candidates":[{"content":{"parts":[{"text":"First part."},{"text":"Second part."}]}}]}"""
+        assertEquals("First part.\nSecond part.", GeminiCopilotClient.extractAnswer(response))
+    }
+
+    @Test
+    fun `science copilot reports empty Gemini responses`() {
+        try {
+            GeminiCopilotClient.extractAnswer("{\"candidates\":[]}")
+            fail("Expected empty response to be rejected")
+        } catch (expected: IllegalStateException) {
+            assertTrue(expected.message.orEmpty().contains("no answer"))
+        }
+    }
 
     @Test
     fun `app name matches Solar Sandbox`() {
@@ -83,6 +100,7 @@ class SolarPhysicsTest {
         assertEquals(expectedEarthPosition.y, earth.pos.y, 1e-12)
         assertEquals(expectedEarthPosition.z, earth.pos.z, 1e-12)
         assertEquals(expectedEarthVelocity.length(), earth.vel.length(), 1e-10)
+        assertTrue("Earth's J2000 orbit should lie in the app's XZ ecliptic plane", kotlin.math.abs(earth.pos.z) > kotlin.math.abs(earth.pos.y))
         assertTrue("Earth should stay near its observed 1 AU orbit", (earth.pos - sun.pos).length() in 0.95..1.05)
         assertTrue("Moon should remain at its observed geocentric distance", (moon.pos - earth.pos).length() in 0.0023..0.0029)
     }
@@ -177,5 +195,212 @@ class SolarPhysicsTest {
         val pts = engine.predictTrajectory(Vec3d(1.5, 0.0, 0.0), Vec3d(0.0, 0.0, 5.0), steps = 32)
         assertEquals(32, pts.size)
         assertTrue((pts.last() - pts.first()).length() > 0.1)
+    }
+
+    @Test
+    fun `black hole tidal disruption produces spiral filaments, spaghettification, and telemetry status`() {
+        val engine = PhysicsEngine()
+        val bh = CelestialBody(
+            id = 1L, name = "Gargantua", type = BodyType.BLACK_HOLE,
+            pos = Vec3d.ZERO, vel = Vec3d.ZERO,
+            massSolar = 12.0, radiusKm = 35.4, temperatureK = 0.0
+        )
+        val star = CelestialBody(
+            id = 2L, name = "Sun", type = BodyType.STAR,
+            pos = Vec3d(0.18, 0.0, 0.0), vel = Vec3d(0.0, 0.0, 8.0),
+            massSolar = 1.0, radiusKm = 696340.0, temperatureK = 5778.0, luminositySolar = 1.0
+        )
+        engine.loadSnapshot(SimulationSnapshot("Spaghettify", "test", 0.0, listOf(bh, star), SimulationConfig(timeScaleYearsPerSec = 0.02)))
+        engine.step(0.02)
+        val frame = engine.buildRenderFrameState(60f)
+        assertTrue("Expected visible tidal stream filaments", frame.tidalFilaments.isNotEmpty())
+        val starNow = frame.bodies.first { it.id == 2L }
+        assertTrue("Expected star tidalStretchAmount > 0.1, got ${starNow.tidalStretchAmount}", starNow.tidalStretchAmount > 0.1f)
+        val tel = engine.computeTelemetry(starNow)
+        assertTrue("Expected Spaghettifying in telemetry status: ${tel.statusSummary}", tel.statusSummary.contains("Spaghettifying", ignoreCase = true))
+    }
+
+    @Test
+    fun `smaller black hole consumes heavier star on direct collision`() {
+        val engine = PhysicsEngine()
+        val bh = CelestialBody(
+            id = 1L, name = "Stellar BH", type = BodyType.BLACK_HOLE,
+            pos = Vec3d.ZERO, vel = Vec3d.ZERO,
+            massSolar = 12.0, radiusKm = 35.4, temperatureK = 0.0
+        )
+        val heavyStar = CelestialBody(
+            id = 2L, name = "Blue Supergiant", type = BodyType.STAR,
+            pos = Vec3d(0.005, 0.0, 0.0), vel = Vec3d(-1.0, 0.0, 0.0),
+            massSolar = 25.0, radiusKm = 2_000_000.0, temperatureK = 22000.0, luminositySolar = 5000.0
+        )
+        engine.loadSnapshot(SimulationSnapshot("BHWin", "test", 0.0, listOf(bh, heavyStar), SimulationConfig(timeScaleYearsPerSec = 0.05)))
+        repeat(10) { engine.step(0.02) }
+        val bodies = engine.getBodiesSnapshot()
+        assertEquals(1, bodies.size)
+        val survivor = bodies.first()
+        assertEquals(BodyType.BLACK_HOLE, survivor.type)
+        assertTrue("Black hole should gain mass and record absorbedMassSolar", survivor.massSolar >= 36.5 && survivor.absorbedMassSolar > 20.0)
+    }
+
+    @Test
+    fun `snapshot serialization preserves BodyArchetype and absorbedMassSolar`() {
+        val snap = SolarSystemPresets.buildPreset(SystemPreset.SOLAR_SYSTEM)
+        val bh = CelestialBody(
+            id = 999L, name = "Test BH", type = BodyType.BLACK_HOLE,
+            archetype = BodyArchetype.GENERIC_ROCK,
+            pos = Vec3d(5.0, 0.0, 0.0), vel = Vec3d.ZERO,
+            massSolar = 20.0, radiusKm = 59.0, temperatureK = 0.0, absorbedMassSolar = 3.25
+        )
+        val modified = snap.copy(bodies = snap.bodies + bh)
+        val json = SnapshotSerializer.toJsonString(modified)
+        val decoded = SnapshotSerializer.fromJsonString(json)
+        val decodedJupiter = decoded.bodies.first { it.name == "Jupiter" }
+        val decodedBh = decoded.bodies.first { it.id == 999L }
+        assertEquals(BodyArchetype.JUPITER, decodedJupiter.archetype)
+        assertEquals(3.25, decodedBh.absorbedMassSolar, 1e-4)
+    }
+
+    @Test
+    fun `coupled star mass increase scales luminosity, temperature, and spectral class`() {
+        val sun = CelestialBody(
+            id = 1L, name = "Sun", type = BodyType.STAR, spectralClass = SpectralClass.G,
+            pos = Vec3d.ZERO, vel = Vec3d.ZERO, massSolar = 1.0, radiusKm = 696_340.0,
+            temperatureK = 5778.0, luminositySolar = 1.0
+        )
+        val (bigger, _) = PhysicsEngine.applyCoupledAstrophysics(sun, sun.copy(massSolar = 5.0))
+        assertTrue("Expected luminosity > 100 L_sun for 5 M_sun star, got ${bigger.luminositySolar}", bigger.luminositySolar > 100.0)
+        assertTrue("Expected hotter temperature for 5 M_sun star, got ${bigger.temperatureK}", bigger.temperatureK > 10000.0)
+        assertEquals(SpectralClass.B, bigger.spectralClass)
+
+        val wd = CelestialBody(
+            id = 2L, name = "WD", type = BodyType.WHITE_DWARF,
+            pos = Vec3d.ZERO, vel = Vec3d.ZERO, massSolar = 0.85, radiusKm = 7000.0,
+            temperatureK = 26000.0, luminositySolar = 0.06
+        )
+        val (ns, wdMsg) = PhysicsEngine.applyCoupledAstrophysics(wd, wd.copy(massSolar = 1.6))
+        assertEquals(BodyType.NEUTRON_STAR, ns.type)
+        assertNotNull(wdMsg)
+
+        val (bh, nsMsg) = PhysicsEngine.applyCoupledAstrophysics(ns, ns.copy(massSolar = 3.2))
+        assertEquals(BodyType.BLACK_HOLE, bh.type)
+        assertNotNull(nsMsg)
+    }
+
+    @Test
+    fun `tiny asteroid hitting sun produces zero craters and zero explosion particles`() {
+        val engine = PhysicsEngine()
+        val sun = CelestialBody(
+            id = 1L, name = "Sun", type = BodyType.STAR, spectralClass = SpectralClass.G,
+            pos = Vec3d.ZERO, vel = Vec3d.ZERO, massSolar = 1.0, radiusKm = 696_340.0,
+            temperatureK = 5778.0, luminositySolar = 1.0
+        )
+        val speck = CelestialBody(
+            id = 2L, name = "Tiny Asteroid", type = BodyType.ASTEROID,
+            pos = Vec3d(0.01, 0.0, 0.0), vel = Vec3d(-3.0, 0.0, 0.0),
+            massSolar = 1e-10, radiusKm = 450.0, temperatureK = 180.0
+        )
+        engine.loadSnapshot(SimulationSnapshot("SunImpact", "test", 0.0, listOf(sun, speck), SimulationConfig(timeScaleYearsPerSec = 0.05)))
+        repeat(10) { engine.step(0.02) }
+        val frame = engine.buildRenderFrameState(60f)
+        assertEquals(1, frame.bodies.size)
+        val survivor = frame.bodies.first()
+        assertTrue("Sun must not accumulate craters", survivor.craters.isEmpty())
+        assertTrue("Small asteroid hitting Sun should not spray rocky explosion particles", frame.particles.isEmpty())
+    }
+
+    @Test
+    fun `snapshot serialization preserves showHabitableZone toggle`() {
+        val snap = SolarSystemPresets.buildPreset(SystemPreset.SOLAR_SYSTEM).let {
+            it.copy(config = it.config.copy(showHabitableZone = true))
+        }
+        val json = SnapshotSerializer.toJsonString(snap)
+        val decoded = SnapshotSerializer.fromJsonString(json)
+        assertTrue(decoded.config.showHabitableZone)
+    }
+
+    @Test
+    fun `live Earth geography map responds to temperature changes`() {
+        val baseEarth = SolarSystemPresets.buildPreset(SystemPreset.SOLAR_SYSTEM).bodies.first { it.name == "Earth" }
+        val (_, temperate) = EarthGeography.renderLiveEarthMap(baseEarth)
+        val (_, frozen) = EarthGeography.renderLiveEarthMap(baseEarth.copy(temperatureK = 175.0))
+        val (_, magma) = EarthGeography.renderLiveEarthMap(baseEarth.copy(temperatureK = 1600.0))
+
+        assertTrue("Temperate Earth should have high habitability, got ${temperate.habitabilityPct}", temperate.habitabilityPct >= 70)
+        assertTrue("Frozen Earth should have high ice cover, got ${frozen.iceCoverPct}", frozen.iceCoverPct >= 80)
+        assertTrue("Hot magma Earth should show molten coverage, got ${magma.moltenPct}", magma.moltenPct > 10)
+    }
+
+    @Test
+    fun `solar system planets maintain monotonic astronomical radius proportions`() {
+        val snap = SolarSystemPresets.buildPreset(SystemPreset.SOLAR_SYSTEM)
+        fun rad(name: String): Double = snap.bodies.first { it.name == name }.getVisualRadiusAu(false)
+        assertTrue(rad("Mercury") < rad("Mars"))
+        assertTrue(rad("Mars") < rad("Earth"))
+        assertTrue(rad("Earth") < rad("Neptune"))
+        assertTrue(rad("Neptune") < rad("Uranus"))
+        assertTrue(rad("Uranus") < rad("Saturn"))
+        assertTrue(rad("Saturn") < rad("Jupiter"))
+    }
+
+    @Test
+    fun `black hole spawns dark without accretion disk and builds disk bins during tidal disruption`() {
+        val engine = PhysicsEngine()
+        val bh = CelestialBody(
+            id = 1L, name = "Schwarzschild BH", type = BodyType.BLACK_HOLE,
+            pos = Vec3d.ZERO, vel = Vec3d.ZERO,
+            massSolar = 15.0, radiusKm = 44.3, temperatureK = 0.0
+        )
+        assertEquals(0f, bh.accretionActivity, 1e-6f)
+        assertTrue("Newly spawned black hole should start with empty diskProfile", bh.diskProfile.all { it == 0f })
+
+        val star = CelestialBody(
+            id = 2L, name = "Donor Star", type = BodyType.STAR,
+            pos = Vec3d(0.16, 0.0, 0.0), vel = Vec3d(0.0, 0.0, 6.0),
+            massSolar = 1.0, radiusKm = 696_340.0, temperatureK = 5778.0, luminositySolar = 1.0
+        )
+        engine.loadSnapshot(SimulationSnapshot("DiskGrowth", "test", 0.0, listOf(bh, star), SimulationConfig(timeScaleYearsPerSec = 0.04)))
+        repeat(30) { engine.step(0.025) }
+
+        val bhAfter = engine.getBodiesSnapshot().first { it.type == BodyType.BLACK_HOLE }
+        assertTrue("Black hole should spawn orbiting accretion parcels or build radial disk bins", bhAfter.diskProfile.max() > 0.01f || bhAfter.accretionParcels.isNotEmpty())
+        assertTrue("Black hole accretionActivity should increase after tidal disruption", bhAfter.accretionActivity > 0.05f)
+    }
+
+    @Test
+    fun `collision physics distinguishes grazing hit-and-run from hypervelocity disruption`() {
+        val engine = PhysicsEngine()
+
+        // High-angle oblique grazing collision -> Hit & Run leaves >= 2 major bodies
+        engine.launchPresetCollisionScenario(CollisionScenarioPreset.GRAZING_WORLDS, impactAngleDeg = 68.0, speedVsEscapeRatio = 1.65, startCinematic = false)
+        repeat(150) { engine.step(0.035) }
+        val grazingSurvivors = engine.getBodiesSnapshot().filter { !it.isBackgroundCluster && it.type != BodyType.STAR && it.type != BodyType.DEBRIS }
+        assertTrue("Grazing hit-and-run should leave both worlds surviving, got ${grazingSurvivors.size}", grazingSurvivors.size >= 2)
+
+        // Head-on hypervelocity rocky collision -> catastrophic disruption & macroscopic debris remnants
+        engine.launchPresetCollisionScenario(CollisionScenarioPreset.ROCKY_HEAD_ON, impactAngleDeg = 4.0, speedVsEscapeRatio = 2.6, startCinematic = false)
+        repeat(150) { engine.step(0.035) }
+        val headOnBodies = engine.getBodiesSnapshot()
+        val hasDebrisOrCrateredRemnant = headOnBodies.any { it.type == BodyType.DEBRIS || it.crustHeat > 0.25f || it.craters.isNotEmpty() }
+        assertTrue("Head-on hypervelocity collision should produce debris fragments or intensely heated cratered remnant", hasDebrisOrCrateredRemnant)
+    }
+
+    @Test
+    fun `cinematic collision director activates, advances phase on impact, and replays cleanly`() {
+        val engine = PhysicsEngine()
+        engine.launchPresetCollisionScenario(CollisionScenarioPreset.EARTH_THEIA, startCinematic = true)
+        val initialFrame = engine.buildRenderFrameState(60f)
+        assertTrue("Cinematic mode should start active", initialFrame.cinematicState.isActive)
+        assertEquals(CinematicPhase.WIDE_APPROACH, initialFrame.cinematicState.phase)
+        assertFalse(initialFrame.cinematicState.impactOccurred)
+
+        repeat(150) { engine.step(0.035) }
+        val midFrame = engine.buildRenderFrameState(60f)
+        assertTrue("Earth-Theia preset should reach impact within test steps", midFrame.cinematicState.impactOccurred)
+
+        engine.replayCinematicCollision()
+        val replayFrame = engine.buildRenderFrameState(60f)
+        assertTrue(replayFrame.cinematicState.isActive)
+        assertFalse("Replay should reset impactOccurred back to pre-impact approach", replayFrame.cinematicState.impactOccurred)
+        assertEquals(CinematicPhase.WIDE_APPROACH, replayFrame.cinematicState.phase)
     }
 }

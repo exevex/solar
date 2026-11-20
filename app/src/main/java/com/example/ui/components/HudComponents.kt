@@ -8,9 +8,12 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Label
 import androidx.compose.material.icons.filled.*
@@ -32,6 +35,9 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.render.ScreenBodyLabel
 import com.example.simulation.BodyType
+import com.example.simulation.CinematicDirectorState
+import com.example.simulation.CinematicPerspective
+import com.example.simulation.CinematicPhase
 import com.example.simulation.SimulationConfig
 import com.example.ui.theme.*
 import com.example.viewmodel.SandboxToolTab
@@ -65,6 +71,8 @@ fun TopTelemetryBar(
     onOpenQuality: () -> Unit,
     onToggleOrbits: () -> Unit,
     onToggleLabels: () -> Unit,
+    onToggleHabitableZone: () -> Unit,
+    onToggleEarthMap: () -> Unit,
     onResetCamera: () -> Unit,
     onToggleCinematic: () -> Unit,
     modifier: Modifier = Modifier
@@ -161,6 +169,22 @@ fun TopTelemetryBar(
                     onClick = onToggleLabels
                 )
                 HudIconButton(
+                    icon = Icons.Default.Eco,
+                    contentDesc = stringResource(R.string.cd_toggle_habitable_zone),
+                    active = uiState.config.showHabitableZone,
+                    activeTint = EmeraldOrbit,
+                    tag = "toggle_habitable_zone_button",
+                    onClick = onToggleHabitableZone
+                )
+                HudIconButton(
+                    icon = Icons.Default.Map,
+                    contentDesc = stringResource(R.string.cd_earth_map),
+                    active = uiState.showEarthMapOverlay,
+                    activeTint = EmeraldOrbit,
+                    tag = "toggle_earth_map_button",
+                    onClick = onToggleEarthMap
+                )
+                HudIconButton(
                     icon = Icons.Default.CenterFocusStrong,
                     contentDesc = stringResource(R.string.cd_focus_body),
                     active = false,
@@ -199,6 +223,7 @@ private fun HudIconButton(
     contentDesc: String,
     active: Boolean,
     tag: String,
+    activeTint: Color = CyanTelemetry,
     onClick: () -> Unit
 ) {
     IconButton(
@@ -210,7 +235,7 @@ private fun HudIconButton(
         Icon(
             imageVector = icon,
             contentDescription = contentDesc,
-            tint = if (active) CyanTelemetry else TextSecondary,
+            tint = if (active) activeTint else TextSecondary,
             modifier = Modifier.size(20.dp)
         )
     }
@@ -224,8 +249,10 @@ fun ToolRail(
 ) {
     GlassHudSurface(modifier = modifier.padding(start = 12.dp)) {
         Column(
-            modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier
+                .padding(vertical = 6.dp, horizontal = 4.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             RailButton(
@@ -235,6 +262,22 @@ fun ToolRail(
                 accent = CyanTelemetry,
                 tag = "tool_orbit",
                 onClick = { onSelectTab(SandboxToolTab.NONE) }
+            )
+            RailButton(
+                icon = Icons.Default.AutoAwesome,
+                label = "AI",
+                selected = activeTab == SandboxToolTab.COPILOT,
+                accent = CyanTelemetry,
+                tag = "tool_copilot",
+                onClick = { onSelectTab(SandboxToolTab.COPILOT) }
+            )
+            RailButton(
+                icon = Icons.Default.OpenWith,
+                label = "Drag",
+                selected = activeTab == SandboxToolTab.DRAG,
+                accent = AmberWarm,
+                tag = "tool_drag",
+                onClick = { onSelectTab(SandboxToolTab.DRAG) }
             )
             RailButton(
                 icon = Icons.Default.AddCircleOutline,
@@ -253,6 +296,14 @@ fun ToolRail(
                 onClick = { onSelectTab(SandboxToolTab.SLINGSHOT) }
             )
             RailButton(
+                icon = Icons.Default.FlashOn,
+                label = "Crash",
+                selected = activeTab == SandboxToolTab.COLLIDE,
+                accent = AmberWarm,
+                tag = "tool_collide",
+                onClick = { onSelectTab(SandboxToolTab.COLLIDE) }
+            )
+            RailButton(
                 icon = Icons.Default.Whatshot,
                 label = "Smash",
                 selected = activeTab == SandboxToolTab.WEAPONS,
@@ -268,6 +319,129 @@ fun ToolRail(
                 tag = "tool_inspect",
                 onClick = { onSelectTab(SandboxToolTab.INSPECT) }
             )
+        }
+    }
+}
+
+@Composable
+fun CosmicStatusTicker(
+    uiState: SandboxUiState,
+    modifier: Modifier = Modifier
+) {
+    val selectedTelemetry = uiState.selectedTelemetry
+    val showDragBanner = uiState.activeToolTab == SandboxToolTab.DRAG
+    val showSpawnBanner = uiState.activeToolTab == SandboxToolTab.SPAWN
+    val latestEvents = uiState.activityFeed.take(2)
+    if (!showDragBanner && !showSpawnBanner && selectedTelemetry == null && latestEvents.isEmpty()) return
+
+    Column(
+        modifier = modifier
+            .padding(start = 76.dp, top = 58.dp)
+            .widthIn(max = 325.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        if (showDragBanner) {
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = PanelObsidian,
+                border = BorderStroke(1.dp, AmberWarm.copy(alpha = 0.75f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(Icons.Default.OpenWith, contentDescription = null, tint = AmberWarm, modifier = Modifier.size(14.dp))
+                    Text(
+                        text = "Drag Tool: Touch & drag any object to move/fling",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AmberWarm
+                    )
+                }
+            }
+        }
+        if (showSpawnBanner) {
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = PanelObsidian,
+                border = BorderStroke(1.dp, EmeraldOrbit.copy(alpha = 0.75f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(Icons.Default.MyLocation, contentDescription = null, tint = EmeraldOrbit, modifier = Modifier.size(14.dp))
+                    Text(
+                        text = if (uiState.spawnAim.requireConfirmSpawn)
+                            "Aim & Place: Tap space to aim • Orbit to inspect • Place Here"
+                        else
+                            "Instant Tap: Tap anywhere in space to spawn immediately",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = EmeraldOrbit
+                    )
+                }
+            }
+        }
+
+        if (selectedTelemetry != null) {
+            val isCritical = selectedTelemetry.body.tidalStress > 0.12f || selectedTelemetry.body.crustHeat > 0.35f
+            val borderCol = when {
+                isCritical -> DangerNova.copy(alpha = 0.75f)
+                selectedTelemetry.body.type == BodyType.BLACK_HOLE -> PurpleAccretion.copy(alpha = 0.7f)
+                else -> HairlineBorder
+            }
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = PanelObsidian,
+                border = BorderStroke(1.dp, borderCol)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(
+                                when {
+                                    isCritical -> DangerNova
+                                    selectedTelemetry.body.type == BodyType.BLACK_HOLE -> PurpleAccretion
+                                    else -> EmeraldOrbit
+                                }
+                            )
+                    )
+                    Text(
+                        text = "${selectedTelemetry.body.name}: ${selectedTelemetry.statusSummary}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+
+        if (latestEvents.isNotEmpty()) {
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = PanelObsidian,
+                border = BorderStroke(1.dp, HairlineBorder)
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    latestEvents.forEachIndexed { idx, msg ->
+                        Text(
+                            text = "• $msg",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (idx == 0) CyanTelemetry else TextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -431,26 +605,46 @@ fun LabelsOverlay(
         for (lbl in labels) {
             val offsetY = with(density) { 16.dp.roundToPx() }
             val accent = when {
+                lbl.statusTag == "SPAGHETTIFYING" || lbl.statusTag == "MOLTEN" -> DangerNova
                 lbl.isSelected -> CyanTelemetry
                 lbl.type == BodyType.BLACK_HOLE -> PurpleAccretion
                 lbl.type.isLuminous -> AmberWarm
                 else -> TextSecondary
             }
-            Surface(
-                shape = RoundedCornerShape(6.dp),
-                color = PanelObsidian,
-                border = BorderStroke(if (lbl.isSelected) 1.dp else 0.5.dp, accent.copy(alpha = 0.75f)),
+            Column(
                 modifier = Modifier
-                    .offset { IntOffset(lbl.xPx.roundToInt() - 30, lbl.yPx.roundToInt() + offsetY) }
-                    .clickable { onSelectBody(lbl.id) }
+                    .offset { IntOffset(lbl.xPx.roundToInt() - 32, lbl.yPx.roundToInt() + offsetY) },
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text(
-                    text = lbl.name,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (lbl.isSelected) TextPrimary else accent,
-                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
-                    maxLines = 1
-                )
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = PanelObsidian,
+                    border = BorderStroke(if (lbl.isSelected) 1.dp else 0.5.dp, accent.copy(alpha = 0.78f)),
+                    modifier = Modifier.clickable { onSelectBody(lbl.id) }
+                ) {
+                    Text(
+                        text = lbl.name,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (lbl.isSelected) TextPrimary else accent,
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                        maxLines = 1
+                    )
+                }
+                if (lbl.statusTag != null) {
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = accent.copy(alpha = 0.22f),
+                        modifier = Modifier.padding(top = 2.dp)
+                    ) {
+                        Text(
+                            text = lbl.statusTag,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = accent,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                            maxLines = 1
+                        )
+                    }
+                }
             }
         }
     }
@@ -474,5 +668,192 @@ fun formatTimeRate(yearsPerSec: Double): String {
         yearsPerSec < 0.08 -> String.format("%.1f day/s", yearsPerSec * 365.25)
         yearsPerSec < 1.0 -> String.format("%.1f mo/s", yearsPerSec * 12.0)
         else -> String.format("%.1f yr/s", yearsPerSec)
+    }
+}
+
+@Composable
+fun HabitableZoneLegendPill(modifier: Modifier = Modifier) {
+    GlassHudSurface(
+        modifier = modifier.testTag("habitable_zone_legend"),
+        borderColor = EmeraldOrbit.copy(alpha = 0.65f)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            ZoneLegendDot(color = Color(0xFFF23D33), label = "Hot (<0.90√L)")
+            ZoneLegendDot(color = Color(0xFF1EE67A), label = "Habitable (0.90–1.85√L)")
+            ZoneLegendDot(color = Color(0xFF3D9EFA), label = "Cold (>1.85√L)")
+        }
+    }
+}
+
+@Composable
+private fun ZoneLegendDot(color: Color, label: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(color))
+        Text(label, style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+    }
+}
+
+@Composable
+fun CinematicCollisionOverlay(
+    cinematicState: CinematicDirectorState,
+    onTogglePause: () -> Unit,
+    onReplay: () -> Unit,
+    onSetSpeed: (Float) -> Unit,
+    onSetPerspective: (CinematicPerspective) -> Unit,
+    onExit: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val phaseLabel = when (cinematicState.phase) {
+        CinematicPhase.WIDE_APPROACH -> "TRAJECTORY APPROACH"
+        CinematicPhase.CLOSE_IMPACT -> "CONTACT & COMPRESSION"
+        CinematicPhase.EJECTA_PLUME -> "EJECTA PLUME"
+        CinematicPhase.FRAGMENT_TRACK -> "REMNANT TRACK"
+        CinematicPhase.DEBRIS_WIDE -> "WIDE DEBRIS FIELD"
+    }
+    val phaseColor = when (cinematicState.phase) {
+        CinematicPhase.WIDE_APPROACH -> CyanTelemetry
+        CinematicPhase.CLOSE_IMPACT -> DangerNova
+        CinematicPhase.EJECTA_PLUME -> AmberWarm
+        CinematicPhase.FRAGMENT_TRACK, CinematicPhase.DEBRIS_WIDE -> EmeraldOrbit
+    }
+
+    Box(modifier = modifier.fillMaxSize()) {
+        // Top status banner + Exit button
+        Row(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            GlassHudSurface(
+                borderColor = phaseColor.copy(alpha = 0.7f),
+                modifier = Modifier.weight(1f, fill = false).padding(end = 8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = phaseColor.copy(alpha = 0.22f),
+                        border = BorderStroke(1.dp, phaseColor.copy(alpha = 0.7f))
+                    ) {
+                        Text(
+                            text = phaseLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = phaseColor,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                    Text(
+                        text = cinematicState.summaryBanner ?: "Cinematic Impact Camera",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            GlassHudSurface(borderColor = DangerNova.copy(alpha = 0.55f)) {
+                TextButton(
+                    onClick = onExit,
+                    modifier = Modifier.heightIn(min = 42.dp).testTag("exit_cinematic_btn")
+                ) {
+                    Icon(Icons.Default.Close, contentDescription = stringResource(R.string.cd_cinematic_exit), tint = DangerNova, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Exit Cinematic", color = TextPrimary, style = MaterialTheme.typography.labelMedium)
+                }
+            }
+        }
+
+        // Bottom Playback & Camera Perspective Controls
+        GlassHudSurface(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 12.dp, start = 16.dp, end = 16.dp),
+            borderColor = HairlineCyan
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.horizontalScroll(rememberScrollState())
+                ) {
+                    IconButton(
+                        onClick = onTogglePause,
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(if (cinematicState.isPaused) AmberStar.copy(alpha = 0.22f) else CyanTelemetry.copy(alpha = 0.22f))
+                            .testTag("cinematic_play_pause_btn")
+                    ) {
+                        Icon(
+                            imageVector = if (cinematicState.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                            contentDescription = stringResource(R.string.cd_play_pause),
+                            tint = if (cinematicState.isPaused) AmberWarm else CyanTelemetry
+                        )
+                    }
+
+                    IconButton(
+                        onClick = onReplay,
+                        modifier = Modifier.size(44.dp).testTag("replay_cinematic_btn")
+                    ) {
+                        Icon(Icons.Default.Replay, contentDescription = stringResource(R.string.cd_cinematic_replay), tint = EmeraldOrbit)
+                    }
+
+                    VerticalDivider(modifier = Modifier.height(22.dp), color = HairlineBorder)
+
+                    // Playback speed chips
+                    listOf(0.25f to "0.25×", 0.5f to "0.5×", 1.0f to "1×", 2.0f to "2×").forEach { (spd, lbl) ->
+                        val active = kotlin.math.abs(cinematicState.playbackSpeed - spd) < 0.05f
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (active) AmberStar.copy(alpha = 0.24f) else PanelElevated,
+                            border = BorderStroke(1.dp, if (active) AmberWarm else HairlineBorder),
+                            modifier = Modifier
+                                .heightIn(min = 34.dp)
+                                .clickable { onSetSpeed(spd) }
+                                .testTag("cin_speed_$lbl")
+                        ) {
+                            Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)) {
+                                Text(lbl, style = MaterialTheme.typography.labelSmall, color = if (active) AmberWarm else TextSecondary)
+                            }
+                        }
+                    }
+
+                    VerticalDivider(modifier = Modifier.height(22.dp), color = HairlineBorder)
+
+                    // Camera perspective selector
+                    CinematicPerspective.entries.forEach { persp ->
+                        val sel = cinematicState.perspective == persp
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (sel) CyanTelemetry.copy(alpha = 0.22f) else PanelElevated,
+                            border = BorderStroke(1.dp, if (sel) CyanTelemetry else HairlineBorder),
+                            modifier = Modifier
+                                .heightIn(min = 34.dp)
+                                .clickable { onSetPerspective(persp) }
+                                .testTag("cin_persp_${persp.name}")
+                        ) {
+                            Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)) {
+                                Text(persp.label, style = MaterialTheme.typography.labelSmall, color = if (sel) CyanTelemetry else TextSecondary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

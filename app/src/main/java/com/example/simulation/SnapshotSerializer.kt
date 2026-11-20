@@ -35,6 +35,7 @@ object SnapshotSerializer {
             put("trueScaleMode", snapshot.config.trueScaleMode)
             put("showOrbits", snapshot.config.showOrbits)
             put("showLabels", snapshot.config.showLabels)
+            put("showHabitableZone", snapshot.config.showHabitableZone)
             put("showEventText", snapshot.config.showEventText)
         }
         root.put("config", cfg)
@@ -45,6 +46,7 @@ object SnapshotSerializer {
                 put("id", b.id)
                 put("name", b.name)
                 put("type", b.type.name)
+                put("archetype", b.archetype.name)
                 put("spectralClass", b.spectralClass.name)
                 put("px", b.pos.x); put("py", b.pos.y); put("pz", b.pos.z)
                 put("vx", b.vel.x); put("vy", b.vel.y); put("vz", b.vel.z)
@@ -70,6 +72,13 @@ object SnapshotSerializer {
                 put("initialMassSolar", b.initialMassSolar)
                 put("evolutionStage", b.evolutionStage.name)
                 put("accretionActivity", b.accretionActivity.toDouble())
+                put("absorbedMassSolar", b.absorbedMassSolar)
+                put("diskNormalX", b.diskPlaneNormal.x)
+                put("diskNormalY", b.diskPlaneNormal.y)
+                put("diskNormalZ", b.diskPlaneNormal.z)
+                val dpArr = JSONArray()
+                for (bin in b.diskProfile) dpArr.put(bin.toDouble())
+                put("diskProfile", dpArr)
                 put("isBackgroundCluster", b.isBackgroundCluster)
                 if (b.parentBodyId != null) put("parentBodyId", b.parentBodyId)
 
@@ -117,6 +126,7 @@ object SnapshotSerializer {
                 trueScaleMode = cfgObj.optBoolean("trueScaleMode", false),
                 showOrbits = cfgObj.optBoolean("showOrbits", true),
                 showLabels = cfgObj.optBoolean("showLabels", true),
+                showHabitableZone = cfgObj.optBoolean("showHabitableZone", false),
                 showEventText = cfgObj.optBoolean("showEventText", true)
             )
         } else SimulationConfig()
@@ -151,11 +161,21 @@ object SnapshotSerializer {
                 }
             } else emptyList()
 
+            val bodyType = BodyType.valueOf(bj.getString("type"))
+            val defaultArchetype = when (bodyType) {
+                BodyType.EARTH_LIKE -> BodyArchetype.GENERIC_EARTH
+                BodyType.GAS_GIANT -> BodyArchetype.GENERIC_GAS
+                BodyType.ICE_GIANT -> BodyArchetype.GENERIC_ICE
+                BodyType.COMET -> BodyArchetype.COMET
+                else -> BodyArchetype.GENERIC_ROCK
+            }
             bodies.add(
                 CelestialBody(
                     id = bj.getLong("id"),
                     name = bj.getString("name"),
-                    type = BodyType.valueOf(bj.getString("type")),
+                    type = bodyType,
+                    archetype = runCatching { BodyArchetype.valueOf(bj.optString("archetype")) }
+                        .getOrDefault(defaultArchetype),
                     spectralClass = runCatching { SpectralClass.valueOf(bj.optString("spectralClass")) }
                         .getOrDefault(SpectralClass.NONE),
                     pos = Vec3d(bj.getDouble("px"), bj.getDouble("py"), bj.getDouble("pz")),
@@ -190,6 +210,17 @@ object SnapshotSerializer {
                         .getOrDefault(EvolutionStage.NONE),
                     parentBodyId = if (bj.has("parentBodyId")) bj.getLong("parentBodyId") else null,
                     accretionActivity = bj.optDouble("accretionActivity", 0.0).toFloat(),
+                    absorbedMassSolar = bj.optDouble("absorbedMassSolar", 0.0),
+                    diskPlaneNormal = Vec3d(
+                        bj.optDouble("diskNormalX", 0.24),
+                        bj.optDouble("diskNormalY", 0.97),
+                        bj.optDouble("diskNormalZ", 0.0)
+                    ).normalized(),
+                    diskProfile = bj.optJSONArray("diskProfile")?.let { arr ->
+                        List(8) { idx ->
+                            if (idx < arr.length()) arr.optDouble(idx, 0.0).toFloat() else 0f
+                        }
+                    } ?: listOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f),
                     isBackgroundCluster = bj.optBoolean("isBackgroundCluster", false)
                 )
             )

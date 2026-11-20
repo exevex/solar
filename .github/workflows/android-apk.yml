@@ -61,6 +61,7 @@ jobs:
           if [ ! -f .env ] && [ -f .env.example ]; then
             cp .env.example .env
           fi
+          chmod +x gradlew
 
       - name: Build Debug APK
         id: debug_build

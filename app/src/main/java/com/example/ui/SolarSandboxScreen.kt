@@ -4,8 +4,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -15,21 +13,36 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.render.SolarGLRenderer
 import com.example.render.SolarGLSurfaceView
-import com.example.simulation.Vec3d
+import com.example.simulation.BodyArchetype
+import com.example.simulation.BodyType
 import com.example.ui.components.*
-import com.example.ui.theme.CyanTelemetry
-import com.example.ui.theme.PanelObsidian
 import com.example.viewmodel.SandboxToolTab
 import com.example.viewmodel.SandboxViewModel
 
 @Composable
 fun SolarSandboxScreen(viewModel: SandboxViewModel) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val context = LocalContext.current.applicationContext
+    val appContext = LocalContext.current.applicationContext
+    val copilotContext = remember(uiState.currentPreset, uiState.elapsedYears, uiState.config, uiState.selectedTelemetry, uiState.bodyCount) {
+        buildString {
+            appendLine("Preset: ${uiState.currentPreset.title}; simulated time: ${uiState.elapsedYears} years; bodies: ${uiState.bodyCount}.")
+            appendLine("Paused: ${uiState.config.isPaused}; time scale: ${uiState.config.timeScaleYearsPerSec} years/sec; integrator: ${uiState.config.integrator.label}; exact radius scale: ${uiState.config.trueScaleMode}.")
+            val t = uiState.selectedTelemetry
+            if (t == null) {
+                append("No object selected. No per-body values are available.")
+            } else {
+                val b = t.body
+                appendLine("Selected object: ${b.name} (${b.type.label}; ${b.archetype.name}).")
+                appendLine("Mass: ${b.massSolar} solar masses; radius: ${b.radiusKm} km; temperature: ${b.temperatureK} K; density: ${t.densityGCm3} g/cm^3.")
+                appendLine("Position: (${b.pos.x}, ${b.pos.y}, ${b.pos.z}) AU; velocity: (${b.vel.x}, ${b.vel.y}, ${b.vel.z}) AU/year; speed: ${t.speedKmS} km/s.")
+                append("Status: ${t.statusSummary}; tidal stress: ${b.tidalStress}; absorbed mass: ${b.absorbedMassSolar} solar masses.")
+            }
+        }
+    }
 
-    val renderer = remember(context) {
+    val renderer = remember(appContext) {
         SolarGLRenderer(
-            context = context,
+            context = appContext,
             frameStateRef = viewModel.renderFrameRef,
             onLabelsUpdated = { labels -> viewModel.updateScreenLabels(labels) },
             onFpsUpdated = { fps -> viewModel.updateFps(fps) }
@@ -48,6 +61,7 @@ fun SolarSandboxScreen(viewModel: SandboxViewModel) {
                     context = ctx,
                     renderer = renderer,
                     onTapBody = { id -> viewModel.selectBody(id) },
+                    onAimSpawnWorld = { worldPos -> viewModel.aimSpawnAtWorldPos(worldPos) },
                     onTapSpawnWorld = { worldPos -> viewModel.spawnAtWorldPos(worldPos) },
                     onSlingshotAim = { pos, vel -> viewModel.onSlingshotAim(pos, vel) },
                     onSlingshotRelease = { pos, vel -> viewModel.onSlingshotRelease(pos, vel) },
@@ -56,6 +70,7 @@ fun SolarSandboxScreen(viewModel: SandboxViewModel) {
             },
             update = { view ->
                 view.interactionMode = viewModel.getDesiredInteractionMode()
+                view.requireConfirmSpawn = uiState.spawnAim.requireConfirmSpawn
             },
             modifier = Modifier.fillMaxSize()
         )
@@ -75,19 +90,16 @@ fun SolarSandboxScreen(viewModel: SandboxViewModel) {
                 .fillMaxSize()
                 .windowInsetsPadding(WindowInsets.safeDrawing)
         ) {
-            // Cinematic Exit Pill
+            // Event-Driven Cinematic Collision HUD
             if (uiState.cinematicMode) {
-                Surface(
-                    shape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp),
-                    color = PanelObsidian,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(16.dp)
-                ) {
-                    androidx.compose.material3.TextButton(onClick = { viewModel.toggleCinematicMode() }) {
-                        Text("Exit Cinematic Mode", color = CyanTelemetry)
-                    }
-                }
+                CinematicCollisionOverlay(
+                    cinematicState = uiState.cinematicState,
+                    onTogglePause = { viewModel.toggleCinematicPaused() },
+                    onReplay = { viewModel.replayCinematicCollision() },
+                    onSetSpeed = { viewModel.setCinematicSpeed(it) },
+                    onSetPerspective = { viewModel.setCinematicPerspective(it) },
+                    onExit = { viewModel.exitCinematicMode() }
+                )
             }
 
             AnimatedVisibility(
@@ -105,9 +117,25 @@ fun SolarSandboxScreen(viewModel: SandboxViewModel) {
                         onOpenQuality = { viewModel.setQualityDialogVisible(true) },
                         onToggleOrbits = { viewModel.toggleOrbits() },
                         onToggleLabels = { viewModel.toggleLabels() },
+                        onToggleHabitableZone = { viewModel.toggleHabitableZone() },
+                        onToggleEarthMap = { viewModel.toggleEarthMapOverlay() },
                         onResetCamera = { viewModel.resetCameraView() },
                         onToggleCinematic = { viewModel.toggleCinematicMode() },
                         modifier = Modifier.align(Alignment.TopCenter)
+                    )
+
+                    if (uiState.config.showHabitableZone) {
+                        HabitableZoneLegendPill(
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .padding(top = 56.dp)
+                        )
+                    }
+
+                    // Live Cosmic Activity & Selected Body Status Ticker
+                    CosmicStatusTicker(
+                        uiState = uiState,
+                        modifier = Modifier.align(Alignment.TopStart)
                     )
 
                     // Left Tool Rail
@@ -117,6 +145,26 @@ fun SolarSandboxScreen(viewModel: SandboxViewModel) {
                         modifier = Modifier.align(Alignment.CenterStart)
                     )
 
+                    // Live Earth Surface Map Preview HUD window
+                    if (uiState.showEarthMapOverlay) {
+                        val earthBody = uiState.allBodiesList.firstOrNull {
+                            it.name.equals("Earth", ignoreCase = true)
+                        } ?: uiState.allBodiesList.firstOrNull {
+                            it.archetype == BodyArchetype.EARTH || it.type == BodyType.EARTH_LIKE
+                        }
+                        EarthMapPreviewCard(
+                            earthBody = earthBody,
+                            onClose = { viewModel.toggleEarthMapOverlay() },
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .padding(
+                                    start = 78.dp,
+                                    bottom = if (uiState.activeToolTab == SandboxToolTab.SPAWN) 152.dp else 74.dp
+                                )
+                                .width(238.dp)
+                        )
+                    }
+
                     // Right Context Tool Drawer
                     Box(
                         modifier = Modifier
@@ -124,19 +172,24 @@ fun SolarSandboxScreen(viewModel: SandboxViewModel) {
                             .padding(top = 60.dp, bottom = 76.dp, end = 12.dp)
                     ) {
                         when (uiState.activeToolTab) {
-                            SandboxToolTab.SPAWN -> SpawnDrawer(
-                                uiState = uiState,
-                                onSelectCategory = { viewModel.selectSpawnCategory(it) },
-                                onSelectTemplate = { viewModel.selectSpawnTemplate(it) },
-                                onSpawnQuickOrbit = {
-                                    val r = 1.6 + (uiState.bodyCount % 5) * 0.45
-                                    viewModel.spawnAtWorldPos(Vec3d(r, 0.0, 0.0))
-                                },
+                            SandboxToolTab.COPILOT -> ScienceCopilotPanel(
+                                simulationContext = copilotContext,
                                 onClose = { viewModel.setToolTab(SandboxToolTab.NONE) }
                             )
                             SandboxToolTab.SLINGSHOT -> SlingshotHintCard(
                                 template = uiState.selectedSpawnTemplate,
                                 onSwitchToSpawnCatalog = { viewModel.setToolTab(SandboxToolTab.SPAWN) },
+                                onClose = { viewModel.setToolTab(SandboxToolTab.NONE) }
+                            )
+                            SandboxToolTab.COLLIDE -> CollisionLabPanel(
+                                uiState = uiState,
+                                onSelectBodyA = { viewModel.selectCollisionBodyA(it) },
+                                onSelectBodyB = { viewModel.selectCollisionBodyB(it) },
+                                onAngleChange = { viewModel.setCollisionImpactAngle(it) },
+                                onSpeedChange = { viewModel.setCollisionSpeedRatio(it) },
+                                onToggleAutoCinematic = { viewModel.toggleCollisionAutoCinematic() },
+                                onLaunchCustom = { viewModel.launchCustomCollision() },
+                                onLaunchPreset = { viewModel.launchPresetCollision(it) },
                                 onClose = { viewModel.setToolTab(SandboxToolTab.NONE) }
                             )
                             SandboxToolTab.WEAPONS -> WeaponsPanel(
@@ -155,24 +208,46 @@ fun SolarSandboxScreen(viewModel: SandboxViewModel) {
                                 telemetry = uiState.selectedTelemetry,
                                 onFocusBody = { viewModel.focusAndZoomToBody(it) },
                                 onDeleteBody = { viewModel.deleteSelectedBody() },
-                                onEditBody = { viewModel.editSelectedBody(it) },
+                                onEditBody = { viewModel.editSelectedBody(transform = it) },
                                 onEditDensity = { viewModel.editBodyDensity(it) },
                                 onNudgeOrbit = { viewModel.nudgeSelectedOrbitSpeed(it) },
                                 onClose = { viewModel.setToolTab(SandboxToolTab.NONE) }
                             )
-                            SandboxToolTab.NONE -> Unit
+                            SandboxToolTab.SPAWN, SandboxToolTab.DRAG, SandboxToolTab.NONE -> Unit
                         }
                     }
 
-                    // Bottom Time Control Dock
-                    TimeControlDock(
-                        config = uiState.config,
-                        onTogglePause = { viewModel.togglePause() },
-                        onToggleRewind = { viewModel.toggleRewind() },
-                        onResetPreset = { viewModel.resetCurrentPreset() },
-                        onTimeScaleChange = { viewModel.setTimeScale(it) },
-                        modifier = Modifier.align(Alignment.BottomCenter)
-                    )
+                    // Bottom Dock: Wide Horizontal Spawn Tray OR Time Control Dock
+                    if (uiState.activeToolTab == SandboxToolTab.SPAWN) {
+                        SpawnDrawer(
+                            uiState = uiState,
+                            onSelectCategory = { viewModel.selectSpawnCategory(it) },
+                            onSelectTemplate = { viewModel.selectSpawnTemplate(it) },
+                            onToggleSpawnStationary = { viewModel.toggleSpawnStationary() },
+                            onToggleConfirmSpawn = { viewModel.toggleConfirmBeforeSpawn() },
+                            onNudgeRadius = { viewModel.nudgeSpawnRadius(it) },
+                            onCycleOrbitParent = {
+                                val majors = uiState.allBodiesList.filter { !it.isBackgroundCluster }
+                                val cur = uiState.spawnAim.orbitParentId
+                                val ids = listOf<Long?>(null) + majors.take(4).map { it.id }
+                                val nextIdx = (ids.indexOf(cur) + 1) % ids.size
+                                viewModel.setSpawnOrbitParent(ids[nextIdx])
+                            },
+                            onPlaceHere = { viewModel.confirmSpawnAtAimedPos() },
+                            onTogglePause = { viewModel.togglePause() },
+                            onClose = { viewModel.setToolTab(SandboxToolTab.NONE) },
+                            modifier = Modifier.align(Alignment.BottomCenter)
+                        )
+                    } else {
+                        TimeControlDock(
+                            config = uiState.config,
+                            onTogglePause = { viewModel.togglePause() },
+                            onToggleRewind = { viewModel.toggleRewind() },
+                            onResetPreset = { viewModel.resetCurrentPreset() },
+                            onTimeScaleChange = { viewModel.setTimeScale(it) },
+                            modifier = Modifier.align(Alignment.BottomCenter)
+                        )
+                    }
                 }
             }
         }
@@ -195,6 +270,7 @@ fun SolarSandboxScreen(viewModel: SandboxViewModel) {
                 onBloomChange = { viewModel.setBloomIntensity(it) },
                 onIntegratorChange = { viewModel.setIntegrator(it) },
                 onToggleTrueScale = { viewModel.toggleTrueScale() },
+                onToggleHabitableZone = { viewModel.toggleHabitableZone() },
                 onToggleEventText = { viewModel.toggleEventText() },
                 onDismiss = { viewModel.setQualityDialogVisible(false) }
             )

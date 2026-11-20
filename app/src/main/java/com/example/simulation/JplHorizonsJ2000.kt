@@ -4,11 +4,23 @@ package com.example.simulation
  * DE441 state vectors exported by JPL Horizons at JD 2451545.0 TDB (J2000.0).
  * Horizons output is geometrical ICRF position/velocity relative to the Solar System
  * barycenter, on the J2000 ecliptic. Positions are AU; velocities are AU/year here.
- * The app maps ecliptic north (Z) to its Y-up world axis.
+ * The constants below are pre-mapped into the app's (X, Z, -Y) Y-up frame.
  * Source: https://ssd.jpl.nasa.gov/horizons/
  */
 object JplHorizonsJ2000 {
     data class State(val position: Vec3d, val velocityAuPerYear: Vec3d)
+
+    fun heliocentricPosition(name: String): Vec3d? {
+        val target = state(name) ?: return null
+        val sun = state("Sun") ?: return null
+        return target.position - sun.position
+    }
+
+    fun heliocentricVelocity(name: String): Vec3d? {
+        val target = state(name) ?: return null
+        val sun = state("Sun") ?: return null
+        return target.velocityAuPerYear - sun.velocityAuPerYear
+    }
 
     private val states = mapOf(
         "Sun" to State(Vec3d(-0.007137179161607904, 0.0002062985061910257, 0.002795997495567612), Vec3d(0.00196448263904576, -3.445875676088211e-05, 0.002705376144962327)),

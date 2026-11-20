@@ -3,6 +3,29 @@ package com.example.simulation
 import kotlin.math.*
 import kotlin.random.Random
 
+data class CinematicCameraGoal(
+    val lookAtPos: Vec3d,
+    val yawDeg: Float,
+    val pitchDeg: Float,
+    val distanceAu: Double
+)
+
+data class CinematicDirectorState(
+    val isActive: Boolean = false,
+    val isPaused: Boolean = false,
+    val playbackSpeed: Float = 1.0f,
+    val perspective: CinematicPerspective = CinematicPerspective.AUTO,
+    val phase: CinematicPhase = CinematicPhase.WIDE_APPROACH,
+    val primaryId: Long = -1L,
+    val secondaryId: Long = -1L,
+    val impactOccurred: Boolean = false,
+    val impactPos: Vec3d = Vec3d.ZERO,
+    val impactNormal: Vec3d = Vec3d(1.0, 0.0, 0.0),
+    val timerAfterImpactSec: Float = 0f,
+    val summaryBanner: String? = null,
+    val cameraGoal: CinematicCameraGoal? = null
+)
+
 /**
  * Immutable frame packet handed atomically from the background simulation thread to the OpenGL ES 3.0 renderer.
  */
@@ -11,10 +34,13 @@ data class RenderFrameState(
     val shockwaves: List<ShockwaveEvent>,
     val particles: List<DebrisParticle>,
     val gammaBursts: List<GammaBurstBeam>,
+    val tidalFilaments: List<TidalStreamFilament>,
     val elapsedYears: Double,
     val config: SimulationConfig,
     val simTps: Float,
-    val lastEventMessage: String?
+    val lastEventMessage: String?,
+    val activityFeed: List<String>,
+    val cinematicState: CinematicDirectorState = CinematicDirectorState()
 )
 
 /**
@@ -28,6 +54,7 @@ class PhysicsEngine {
     private var shockwaves = mutableListOf<ShockwaveEvent>()
     private var particles = mutableListOf<DebrisParticle>()
     private var gammaBursts = mutableListOf<GammaBurstBeam>()
+    private var tidalFilaments = mutableListOf<TidalStreamFilament>()
 
     private var currentPresetId: String = SystemPreset.SOLAR_SYSTEM.id
     private var currentPresetName: String = SystemPreset.SOLAR_SYSTEM.title
@@ -42,6 +69,12 @@ class PhysicsEngine {
 
     private var lastEventMessage: String? = null
     private var eventMessageTimerSec = 0f
+    private val activityLog = ArrayDeque<String>(6)
+    private var lastTidalEventLogMs = 0L
+
+    var cinematicState: CinematicDirectorState = CinematicDirectorState()
+        private set
+    private var cinematicInitialSnapshot: SimulationSnapshot? = null
 
     // Reusable scratch buffers for zero-allocation integration
     private var accX = DoubleArray(0)
@@ -53,12 +86,25 @@ class PhysicsEngine {
     }
 
     @Synchronized
-    fun loadSnapshot(snapshot: SimulationSnapshot) {
-        bodies = snapshot.bodies.map { it.copy(trail = it.trail.toList(), craters = it.craters.toList()) }.toMutableList()
+    fun loadSnapshot(snapshot: SimulationSnapshot, resetCinematic: Boolean = true) {
+        bodies = snapshot.bodies.map {
+            it.copy(
+                trail = it.trail.toList(),
+                craters = it.craters.toList(),
+                diskProfile = it.diskProfile.toList(),
+                accretionParcels = it.accretionParcels.toList()
+            )
+        }.toMutableList()
         shockwaves.clear()
         particles.clear()
         gammaBursts.clear()
+        tidalFilaments.clear()
         rewindBuffer.clear()
+        activityLog.clear()
+        if (resetCinematic) {
+            cinematicState = CinematicDirectorState()
+            cinematicInitialSnapshot = null
+        }
         currentPresetId = snapshot.presetId
         currentPresetName = snapshot.name
         elapsedYears = snapshot.elapsedYears
@@ -102,6 +148,19 @@ class PhysicsEngine {
     }
 
     @Synchronized
+    fun updateBodyCoupled(id: Long, scaleRadiusWithMass: Boolean = true, transform: (CelestialBody) -> CelestialBody) {
+        val idx = bodies.indexOfFirst { it.id == id }
+        if (idx < 0) return
+        val original = bodies[idx]
+        val rawEdited = transform(original)
+        val (coupled, eventMsg) = applyCoupledAstrophysics(original, rawEdited, scaleRadiusWithMass)
+        bodies[idx] = coupled
+        if (eventMsg != null) {
+            postEvent(eventMsg)
+        }
+    }
+
+    @Synchronized
     fun removeBody(id: Long) {
         bodies.removeAll { it.id == id }
     }
@@ -122,16 +181,23 @@ class PhysicsEngine {
             shockwaves = shockwaves.toList(),
             particles = particles.map { it.copy() },
             gammaBursts = gammaBursts.toList(),
+            tidalFilaments = tidalFilaments.toList(),
             elapsedYears = elapsedYears,
             config = config,
             simTps = tps,
-            lastEventMessage = if (config.showEventText && eventMessageTimerSec > 0f) lastEventMessage else null
+            lastEventMessage = if (config.showEventText && eventMessageTimerSec > 0f) lastEventMessage else null,
+            activityFeed = activityLog.toList(),
+            cinematicState = cinematicState
         )
     }
 
     private fun postEvent(msg: String) {
         lastEventMessage = msg
         eventMessageTimerSec = 3.5f
+        if (activityLog.firstOrNull() != msg) {
+            if (activityLog.size >= 5) activityLog.removeLast()
+            activityLog.addFirst(msg)
+        }
     }
 
     private fun ensureScratchBuffers(n: Int) {
@@ -163,16 +229,26 @@ class PhysicsEngine {
      */
     @Synchronized
     fun step(realDtSec: Double) {
-        val dtReal = realDtSec.coerceIn(0.001, 0.05)
+        val rawDt = realDtSec.coerceIn(0.001, 0.05)
+        val dtReal = if (cinematicState.isActive) {
+            if (cinematicState.isPaused) {
+                updateCinematicDirector(0.0)
+                return
+            }
+            rawDt * cinematicState.playbackSpeed.toDouble().coerceIn(0.15, 3.0)
+        } else rawDt
 
         if (eventMessageTimerSec > 0f) {
-            eventMessageTimerSec = (eventMessageTimerSec - dtReal.toFloat()).coerceAtLeast(0f)
+            eventMessageTimerSec = (eventMessageTimerSec - rawDt.toFloat()).coerceAtLeast(0f)
         }
 
-        // Update transient VFX even when paused
+        // Update transient VFX (and N-body particle trajectories when simulation is running)
         updateVfx(dtReal.toFloat())
 
-        if (config.isPaused) return
+        if (config.isPaused) {
+            if (cinematicState.isActive) updateCinematicDirector(0.0)
+            return
+        }
 
         // Handle Rewind playback from ring buffer
         if (config.isRewinding) {
@@ -205,16 +281,15 @@ class PhysicsEngine {
         val substeps = computeAdaptiveSubsteps(totalSimDt)
         val subDt = totalSimDt / substeps
 
+        tidalFilaments.clear()
         for (stepIdx in 0 until substeps) {
-            // Keep the previous state so fast physical bodies cannot tunnel through one another
-            // between discrete integration samples.
-            val previousPositions = bodies.associate { it.id to it.pos }
+            val isLastSubstep = stepIdx == substeps - 1
             when (config.integrator) {
                 IntegratorMode.VELOCITY_VERLET -> integrateVelocityVerlet(subDt)
                 IntegratorMode.RK4 -> integrateRK4(subDt)
             }
-            processBlackHolePhysicsAndTidalDisruption(subDt)
-            processCollisions(previousPositions)
+            processBlackHolePhysicsAndTidalDisruption(subDt, generateFilaments = isLastSubstep)
+            processCollisions()
         }
 
         // Spin rotation, cooling, radiative equilibrium temperature, stellar evolution & orbit trails once per tick
@@ -224,6 +299,10 @@ class PhysicsEngine {
         }
 
         elapsedYears += totalSimDt
+
+        if (cinematicState.isActive) {
+            updateCinematicDirector(dtReal)
+        }
     }
 
     private fun computeAdaptiveSubsteps(totalSimDt: Double): Int {
@@ -270,7 +349,7 @@ class PhysicsEngine {
             val bi = bodies[i]
             val mi = bi.massSolar
             val pix = posX[i]; val piy = posY[i]; val piz = posZ[i]
-            val radI = bi.physicsRadiusAu
+            val radI = bi.physicsRadiusAu * 2.0
 
             for (j in i + 1 until n) {
                 val bj = bodies[j]
@@ -280,8 +359,8 @@ class PhysicsEngine {
                 val dx = posX[j] - pix
                 val dy = posY[j] - piy
                 val dz = posZ[j] - piz
-                val radJ = bj.physicsRadiusAu
-                val soft = max(radI + radJ, 1e-12)
+                val radJ = bj.physicsRadiusAu * 2.0
+                val soft = max(radI + radJ, 1e-5)
                 val r2 = dx * dx + dy * dy + dz * dz + soft * soft
                 val invR = 1.0 / sqrt(r2)
                 val invR3 = invR * invR * invR
@@ -391,9 +470,18 @@ class PhysicsEngine {
         }
     }
 
-    private fun processBlackHolePhysicsAndTidalDisruption(subDt: Double) {
+    private fun processBlackHolePhysicsAndTidalDisruption(subDt: Double, generateFilaments: Boolean) {
         val bhIndices = bodies.indices.filter { bodies[it].type == BodyType.BLACK_HOLE }
-        if (bhIndices.isEmpty()) return
+        if (bhIndices.isEmpty()) {
+            // Ensure no stale tidal stretch lingers if all black holes were removed
+            for (i in bodies.indices) {
+                val b = bodies[i]
+                if (b.tidalStretchAmount > 0f || b.tidalStress > 0f || b.tidalTargetBhId != null) {
+                    bodies[i] = b.copy(tidalStress = 0f, tidalStretchAmount = 0f, tidalTargetBhId = null)
+                }
+            }
+            return
+        }
 
         val toRemove = HashSet<Int>()
 
@@ -413,87 +501,262 @@ class PhysicsEngine {
             }
         }
 
+        val stretchedByBhThisStep = HashSet<Int>()
+
         for (bhIdx in bhIndices) {
             var bh = bodies[bhIdx]
-            val bhRad = bh.physicsRadiusAu
-            var accretionGain = 0f
+            val bhRad = bh.getVisualRadiusAu(config.trueScaleMode)
+            val horizonVis = bhRad * 0.45
+            val massScale = (1.0 + ln(max(1.0, bh.massSolar)) * 0.25).coerceIn(1.0, 2.8)
+            val tidalLimit = bhRad * (5.8 + massScale)
+
+            val parcels = bh.accretionParcels.toMutableList()
+            var newDiskNormal = bh.diskPlaneNormal
 
             for (j in bodies.indices) {
                 if (j == bhIdx || j in toRemove) continue
                 val victim = bodies[j]
-                if (victim.type == BodyType.BLACK_HOLE) continue
+                if (victim.type == BodyType.BLACK_HOLE || victim.isBackgroundCluster) continue
 
-                // Fluid Roche limit: 2.44 R_body (M_BH / m_body)^(1/3).
-                // The event horizon remains the hard capture boundary.
-                val tidalLimit = 2.44 * victim.physicsRadiusAu *
-                    cbrt(bh.massSolar / victim.massSolar.coerceAtLeast(1e-18))
-                val interactionLimit = max(tidalLimit, bhRad * 1.5)
-                val diff = victim.pos - bh.pos
-                val dist = diff.length()
-                if (dist < interactionLimit) {
-                    val stress = ((interactionLimit - dist) / interactionLimit).toFloat().coerceIn(0f, 1f)
-                    val shredFraction = (1.8 * stress * subDt).coerceAtMost(0.45)
-                    val absorbedMass = victim.massSolar * shredFraction
-                    val remainingMass = victim.massSolar - absorbedMass
+                val toBh = bh.pos - victim.pos
+                val dist = toBh.length()
+                val victimVisRad = victim.getVisualRadiusAu(config.trueScaleMode)
+                val effectiveLimit = tidalLimit + victimVisRad * 2.5
 
-                    accretionGain = max(accretionGain, stress)
-                    bh = bh.copy(
-                        massSolar = bh.massSolar + absorbedMass,
-                        radiusKm = 2.95325 * (bh.massSolar + absorbedMass),
-                        accretionActivity = (bh.accretionActivity + stress * 0.8f).coerceAtMost(2.0f)
-                    )
+                if (dist < effectiveLimit) {
+                    stretchedByBhThisStep.add(j)
+                    val stretchDir = toBh.normalized()
+                    val stress = ((effectiveLimit - dist) / effectiveLimit).toFloat().coerceIn(0f, 1f)
+                    val stretchAmount = (stress.pow(1.15f) * 1.85f).coerceIn(0.05f, 1.85f)
 
-                    // Spawn glowing plasma stream spiraling into the black hole's accretion disk
-                    if (particles.size < 650 && rng.nextFloat() < 0.65f) {
-                        val tangent = diff.cross(Vec3d(0.0, 1.0, 0.0)).normalized()
-                        val streamVel = tangent * 3.5 - diff.normalized() * 1.2
+                    // Tidal stripping feeds actual bound orbital AccretionParcels instead of instantaneously spawning a fake ring
+                    val shredWeight = ((stress - 0.14f) / 0.86f).coerceIn(0f, 1f)
+                    val shredFraction = (1.35 * shredWeight * subDt).coerceAtMost(0.38)
+                    val strippedMass = victim.massSolar * shredFraction
+                    val remainingMass = victim.massSolar - strippedMass
+
+                    val l1Rel = (victim.pos - bh.pos) + stretchDir * (victimVisRad * 0.85)
+                    val vRel = victim.vel - bh.vel
+                    val angMom = l1Rel.cross(vRel)
+                    val orbitNormal = if (angMom.lengthSq() > 1e-8) angMom.normalized() else bh.diskPlaneNormal
+
+                    if (strippedMass > 0.0 && parcels.size < 96 && rng.nextFloat() < (0.45f + stress * 0.50f)) {
+                        val rCapture = max(horizonVis * 2.8, min(l1Rel.length(), horizonVis * 6.0))
+                        val rDir = if (l1Rel.lengthSq() > 1e-10) l1Rel.normalized() else Vec3d(1.0, 0.0, 0.0)
+                        val tanDir = orbitNormal.cross(rDir).let { if (it.lengthSq() < 1e-8) Vec3d(0.0, 0.0, 1.0) else it.normalized() }
+                        val keplerSpeed = sqrt(AstroConstants.G_AU * max(bh.massSolar, 0.5) / rCapture).coerceIn(1.5, 48.0)
+                        // Slightly sub-Keplerian with inward radial drift so matter spirals inward through viscous heating!
+                        val parcelVel = tanDir * (keplerSpeed * 0.90) - rDir * (keplerSpeed * 0.24)
+                        parcels.add(
+                            AccretionParcel(
+                                relPos = rDir * rCapture + Vec3d(0.0, (rng.nextDouble() - 0.5) * horizonVis * 0.25, 0.0),
+                                relVel = parcelVel,
+                                massSolar = max(strippedMass, 1e-6),
+                                temperatureK = max(victim.temperatureK, 3500.0)
+                            )
+                        )
+                        newDiskNormal = (newDiskNormal * 0.94 + orbitNormal * 0.06).normalized()
+                    }
+
+                    val streamColor = if (victim.type.isLuminous) {
+                        val hot = kelvinToRgb(max(victim.temperatureK, 4800.0))
+                        Triple(
+                            (hot.first * 1.15f).coerceIn(0f, 1.4f),
+                            (hot.second * 1.0f).coerceIn(0f, 1.2f),
+                            (hot.third * 0.85f).coerceIn(0f, 1.1f)
+                        )
+                    } else {
+                        Triple(1.0f, 0.56f + stress * 0.25f, 0.22f)
+                    }
+
+                    // Build curved spiral tidal stream filaments anchored at L1 facing limb into the disk capture zone
+                    if (generateFilaments && tidalFilaments.size < 20 && stress > 0.08f) {
+                        val l1Tip = victim.pos + stretchDir * (victimVisRad * (0.85 + stretchAmount * 0.45))
+                        val tipFromBh = l1Tip - bh.pos
+                        val startRadius = tipFromBh.length().coerceAtLeast(bhRad * 1.30)
+                        val baseAngle = atan2(tipFromBh.z, tipFromBh.x)
+                        val yStart = tipFromBh.y
+
+                        for (arm in 0 until 2) {
+                            val pts = ArrayList<Vec3d>(20)
+                            val armSign = if (arm == 0) 1.0 else -1.0
+                            val targetRingR = bhRad * (1.75 + arm * 0.65)
+
+                            for (s in 0..19) {
+                                val t = s / 19.0
+                                val r = startRadius * (1.0 - t).pow(1.25) + targetRingR * t
+                                val swirlAngle = baseAngle + armSign * (0.04 * arm) + t * (PI * (1.45 + stress * 1.35))
+                                val planeDir = Vec3d(cos(swirlAngle), 0.0, sin(swirlAngle))
+                                val yOff = yStart * (1.0 - t) + sin(t * PI * 2.0) * bhRad * 0.14 * orbitNormal.y
+                                pts.add(bh.pos + planeDir * r + Vec3d(0.0, yOff, 0.0))
+                            }
+                            tidalFilaments.add(
+                                TidalStreamFilament(
+                                    points = pts,
+                                    color = streamColor,
+                                    intensity = (0.55f + stress * 0.85f) * (if (arm == 0) 1.0f else 0.72f)
+                                )
+                            )
+                        }
+                    }
+
+                    // Spawn streaming plasma knots moving toward the BH tidal belt
+                    if (victim.massSolar > 1e-8 && particles.size < 680 && rng.nextFloat() < (0.42f + stress * 0.40f)) {
+                        val radial = -stretchDir
+                        val tangent = radial.cross(orbitNormal).let {
+                            if (it.lengthSq() < 1e-6) Vec3d(1.0, 0.0, 0.0) else it.normalized()
+                        }
+                        val spawnPt = victim.pos + stretchDir * (victimVisRad * (0.8 + rng.nextDouble() * 0.6))
+                        val orbitalSpeed = sqrt(AstroConstants.G_AU * bh.massSolar / max(dist, bhRad)).coerceIn(1.5, 16.0)
+                        val streamVel = bh.vel + tangent * (orbitalSpeed * 0.88) + stretchDir * (orbitalSpeed * 0.35)
                         particles.add(
                             DebrisParticle(
-                                x = victim.pos.x + (rng.nextDouble() - 0.5) * bhRad * 0.4,
-                                y = victim.pos.y + (rng.nextDouble() - 0.5) * bhRad * 0.15,
-                                z = victim.pos.z + (rng.nextDouble() - 0.5) * bhRad * 0.4,
+                                x = spawnPt.x + (rng.nextDouble() - 0.5) * bhRad * 0.18,
+                                y = spawnPt.y + (rng.nextDouble() - 0.5) * bhRad * 0.10,
+                                z = spawnPt.z + (rng.nextDouble() - 0.5) * bhRad * 0.18,
                                 vx = streamVel.x, vy = streamVel.y, vz = streamVel.z,
                                 life = 0f, maxLife = 1.6f + rng.nextFloat() * 1.2f,
                                 size = 1.4f + stress * 2.0f,
-                                r = 1.0f, g = 0.55f + stress * 0.35f, b = 0.25f,
-                                targetBlackHoleId = bh.id
+                                r = streamColor.first.coerceIn(0f, 1f),
+                                g = streamColor.second.coerceIn(0f, 1f),
+                                b = streamColor.third.coerceIn(0f, 1f),
+                                targetBlackHoleId = bh.id,
+                                affectedByGravity = false
                             )
                         )
                     }
 
-                    // Relativistic polar jet particles when accretion is high
-                    if (bh.accretionActivity > 0.6f && particles.size < 650 && rng.nextFloat() < 0.35f) {
+                    if (bh.accretionActivity > 0.75f && particles.size < 680 && rng.nextFloat() < 0.25f) {
                         val sign = if (rng.nextBoolean()) 1.0 else -1.0
                         particles.add(
                             DebrisParticle(
-                                x = bh.pos.x, y = bh.pos.y + sign * bhRad * 0.3, z = bh.pos.z,
-                                vx = (rng.nextDouble() - 0.5) * 0.5,
-                                vy = sign * (8.0 + rng.nextDouble() * 6.0),
-                                vz = (rng.nextDouble() - 0.5) * 0.5,
+                                x = bh.pos.x, y = bh.pos.y + sign * bhRad * 0.45, z = bh.pos.z,
+                                vx = (rng.nextDouble() - 0.5) * 0.35,
+                                vy = sign * (9.0 + rng.nextDouble() * 7.0),
+                                vz = (rng.nextDouble() - 0.5) * 0.35,
                                 life = 0f, maxLife = 1.1f, size = 1.8f,
-                                r = 0.55f, g = 0.82f, b = 1.0f
+                                r = 0.55f, g = 0.85f, b = 1.0f,
+                                affectedByGravity = false
                             )
                         )
                     }
 
-                    if (remainingMass <= victim.initialMassSolar * 0.08 || dist < bhRad * 1.15) {
+                    val nowMs = System.currentTimeMillis()
+                    if (nowMs - lastTidalEventLogMs > 2800L && stress > 0.3f) {
+                        lastTidalEventLogMs = nowMs
+                        postEvent("${victim.name} being tidally disrupted into ${bh.name}'s accretion stream")
+                    }
+
+                    if (remainingMass <= victim.initialMassSolar * 0.08 || dist < bhRad * 1.12) {
                         toRemove.add(j)
-                        bh = bh.copy(massSolar = bh.massSolar + remainingMass, radiusKm = 2.95325 * (bh.massSolar + remainingMass))
-                        postEvent("${victim.name} tidally shredded by ${bh.name}")
+                        // Inject final disrupted core mass directly into outer/mid accretion parcels so disk spins up visibly
+                        val coreSlice = (remainingMass / 8.0).coerceAtLeast(1e-6)
+                        val rCapBase = max(horizonVis * 2.4, min(l1Rel.length(), horizonVis * 5.2))
+                        for (k in 0 until 8) {
+                            if (parcels.size >= 96) break
+                            val ang = k * (PI / 4.0)
+                            val pDir = (Vec3d(cos(ang), 0.0, sin(ang))).normalized()
+                            val tDir = orbitNormal.cross(pDir).let { if (it.lengthSq() < 1e-8) Vec3d(0.0, 0.0, 1.0) else it.normalized() }
+                            val vKep = sqrt(AstroConstants.G_AU * max(bh.massSolar, 0.5) / rCapBase).coerceIn(1.5, 48.0)
+                            parcels.add(
+                                AccretionParcel(
+                                    relPos = pDir * (rCapBase * (0.85 + (k % 3) * 0.14)),
+                                    relVel = tDir * (vKep * 0.92) - pDir * (vKep * 0.20),
+                                    massSolar = coreSlice,
+                                    temperatureK = max(victim.temperatureK, 6500.0)
+                                )
+                            )
+                        }
+                        postEvent("${victim.name} tidally shredded into ${bh.name}'s accretion disk")
                     } else {
                         val scaleFactor = cbrt(remainingMass / victim.massSolar)
                         bodies[j] = victim.copy(
                             massSolar = remainingMass,
                             radiusKm = (victim.radiusKm * scaleFactor).coerceAtLeast(100.0),
-                            crustHeat = (victim.crustHeat + stress * 0.4f).coerceAtMost(1f),
-                            temperatureK = (victim.temperatureK + stress * 1800.0).coerceAtMost(12000.0),
-                            tidalStress = stress
+                            crustHeat = (victim.crustHeat + stress * 0.45f).coerceAtMost(1f),
+                            temperatureK = (victim.temperatureK + stress * 2200.0).coerceAtMost(14000.0),
+                            tidalStress = stress,
+                            tidalStretchDir = stretchDir,
+                            tidalStretchAmount = stretchAmount,
+                            tidalTargetBhId = bh.id
                         )
                     }
-                } else if (victim.tidalStress > 0f) {
-                    bodies[j] = victim.copy(tidalStress = (victim.tidalStress - 0.05f).coerceAtLeast(0f))
                 }
             }
+
+            // Evolve orbiting AccretionParcels via Keplerian shear + viscous circularization + alpha-disk inward drift -> 8 radial bins
+            val binEnergies = FloatArray(8)
+            var iscoAbsorbedMass = 0.0
+            val survivingParcels = ArrayList<AccretionParcel>(parcels.size)
+            val muBh = AstroConstants.G_AU * max(bh.massSolar, 0.1)
+            val minVisR = horizonVis * 1.35
+            val maxVisR = horizonVis * 6.20
+            val binSpan = (maxVisR - minVisR).coerceAtLeast(0.01)
+
+            for (p in parcels) {
+                val r = p.relPos.length().coerceAtLeast(horizonVis * 0.5)
+                val rHat = p.relPos / r
+                // Paczynski-Wiita pseudo-Newtonian pull near ISCO
+                val softGap = (r - horizonVis * 0.72).coerceAtLeast(horizonVis * 0.35)
+                val gravAccel = -rHat * (muBh / (softGap * softGap))
+
+                // Viscous vertical flattening & circularization damping toward instantaneous disk plane
+                val heightOut = p.relPos.dot(newDiskNormal)
+                val vOut = p.relVel.dot(newDiskNormal)
+                val planarAccel = -newDiskNormal * (heightOut * 6.5 + vOut * 3.8)
+
+                // Viscous torque causes slow inward spiral & heating as parcels age
+                val newVel = (p.relVel + (gravAccel + planarAccel) * subDt) * (1.0 - (0.35 * subDt).coerceIn(0.0, 0.12))
+                val newPos = p.relPos + newVel * subDt
+                val newR = newPos.length()
+                val newAge = p.ageSec + subDt.toFloat()
+
+                if (newR < horizonVis * 1.28 || newAge > 16.0f) {
+                    // Parcel crossed ISCO -> permanently adds mass to BH!
+                    iscoAbsorbedMass += p.massSolar
+                } else {
+                    // Accumulate parcel density & viscous heat (T_visc ~ r^(-3/4)) into the 8 radial shader bins
+                    val u = ((newR - minVisR) / binSpan).coerceIn(0.0, 0.999)
+                    val bin = (u * 8.0).toInt().coerceIn(0, 7)
+                    val massWeight = (0.35 + ln(1.0 + p.massSolar * 80.0) * 0.45).toFloat().coerceIn(0.25f, 1.4f)
+                    val radialHeating = 1.18f - u.toFloat() * 0.65f
+                    binEnergies[bin] = (binEnergies[bin] + massWeight * radialHeating).coerceAtMost(2.5f)
+                    survivingParcels.add(
+                        p.copy(
+                            relPos = newPos,
+                            relVel = newVel,
+                            temperatureK = (p.temperatureK + 1800.0 * (1.0 - u) * subDt).coerceAtMost(95000.0),
+                            ageSec = newAge
+                        )
+                    )
+                }
+            }
+
+            // Smooth radial profile bins using viscous inward diffusion + decay (never pops instantaneously!)
+            val oldBins = bh.diskProfile
+            val nextBins = MutableList(8) { idx ->
+                val cur = oldBins.getOrElse(idx) { 0f }
+                val outerFeed = if (idx < 7) oldBins.getOrElse(idx + 1) { 0f } * 0.14f else 0f
+                val target = (binEnergies[idx] + outerFeed).coerceAtMost(2.4f)
+                val rate = if (target > cur) 3.8f * subDt.toFloat() else 0.45f * subDt.toFloat()
+                (cur + (target - cur) * rate.coerceIn(0f, 0.45f)).coerceIn(0f, 2.4f)
+            }
+
+            val totalMassGain = iscoAbsorbedMass
+            val nextMass = bh.massSolar + totalMassGain
+            val nextAbsorbed = bh.absorbedMassSolar + totalMassGain
+            // Overall accretionActivity derives genuinely from the 8 simulated disk bins
+            val avgBinEnergy = nextBins.maxOrNull()?.coerceIn(0f, 2.5f) ?: 0f
+
+            bh = bh.copy(
+                massSolar = nextMass,
+                absorbedMassSolar = nextAbsorbed,
+                radiusKm = 2.95325 * nextMass,
+                diskProfile = nextBins,
+                diskPlaneNormal = newDiskNormal,
+                accretionParcels = survivingParcels,
+                accretionActivity = avgBinEnergy
+            )
 
             // Hawking radiation evaporation if enabled
             if (config.hawkingEvaporation) {
@@ -518,28 +781,26 @@ class PhysicsEngine {
             bodies[bhIdx] = bh
         }
 
+        // Smoothly relax tidal stretch for bodies outside any black hole's tidal zone
+        for (i in bodies.indices) {
+            if (i in toRemove || i in stretchedByBhThisStep) continue
+            val b = bodies[i]
+            if (b.tidalStretchAmount > 0f || b.tidalStress > 0f || b.tidalTargetBhId != null) {
+                bodies[i] = b.copy(
+                    tidalStress = (b.tidalStress - 0.06f).coerceAtLeast(0f),
+                    tidalStretchAmount = (b.tidalStretchAmount - 0.12f).coerceAtLeast(0f),
+                    tidalTargetBhId = if (b.tidalStretchAmount <= 0.12f) null else b.tidalTargetBhId
+                )
+            }
+        }
+
         if (toRemove.isNotEmpty()) {
             val sorted = toRemove.sortedDescending()
             for (idx in sorted) bodies.removeAt(idx)
         }
     }
 
-    private fun sweptDistanceSq(
-        previousA: Vec3d,
-        currentA: Vec3d,
-        previousB: Vec3d,
-        currentB: Vec3d
-    ): Double {
-        val relativeStart = previousB - previousA
-        val relativeDelta = (currentB - previousB) - (currentA - previousA)
-        val deltaSq = relativeDelta.lengthSq()
-        val u = if (deltaSq > 1e-24) {
-            (-relativeStart.dot(relativeDelta) / deltaSq).coerceIn(0.0, 1.0)
-        } else 0.0
-        return (relativeStart + relativeDelta * u).lengthSq()
-    }
-
-    private fun processCollisions(previousPositions: Map<Long, Vec3d> = emptyMap()) {
+    private fun processCollisions() {
         val n = bodies.size
         if (n < 2) return
         val removed = BooleanArray(n)
@@ -548,23 +809,18 @@ class PhysicsEngine {
         for (i in 0 until n) {
             if (removed[i]) continue
             var bi = bodies[i]
-            val ri = bi.physicsRadiusAu
+            val ri = bi.getVisualRadiusAu(config.trueScaleMode)
 
             for (j in i + 1 until n) {
                 if (removed[j]) continue
                 val bj = bodies[j]
                 if (bi.isBackgroundCluster && bj.isBackgroundCluster) continue
-                val rj = bj.physicsRadiusAu
+                val rj = bj.getVisualRadiusAu(config.trueScaleMode)
 
                 val diff = bj.pos - bi.pos
                 val distSq = diff.lengthSq()
-                val minDist = (ri + rj) * 0.995
-                val currentContact = distSq <= minDist * minDist
-                val previousA = previousPositions[bi.id]
-                val previousB = previousPositions[bj.id]
-                val sweptContact = !currentContact && previousA != null && previousB != null &&
-                    sweptDistanceSq(previousA, bi.pos, previousB, bj.pos) <= minDist * minDist
-                if (currentContact || sweptContact) {
+                val minDist = (ri + rj) * 0.88
+                if (distSq < minDist * minDist) {
                     val primaryIsI = bi.massSolar >= bj.massSolar
                     val primary = if (primaryIsI) bi else bj
                     val secondary = if (primaryIsI) bj else bi
@@ -576,117 +832,128 @@ class PhysicsEngine {
                     val relVel = (secondary.vel - primary.vel)
                     val relSpeed = relVel.length()
 
-                    // Black Hole merger or absorption
-                    if (primary.type == BodyType.BLACK_HOLE) {
-                        removed[secondaryIdx] = true
-                        val isMerger = secondary.type == BodyType.BLACK_HOLE
-                        val updated = primary.copy(
-                            massSolar = totalMass,
-                            radiusKm = 2.95325 * totalMass,
-                            vel = comVel,
-                            accretionActivity = (primary.accretionActivity + 1.1f).coerceAtMost(2.5f)
-                        )
-                        bodies[primaryIdx] = updated
-                        if (primaryIsI) bi = updated
-                        shockwaves.add(
-                            ShockwaveEvent(
-                                id = nextEntityId++,
-                                pos = primary.pos,
-                                maxRadiusAu = if (isMerger) 3.5 else 1.2,
-                                ageSec = 0f,
-                                durationSec = if (isMerger) 3.0f else 1.5f,
-                                color = if (isMerger) Triple(0.70f, 0.45f, 1.0f) else Triple(1.0f, 0.72f, 0.35f),
-                                isGravitationalWave = isMerger
-                            )
-                        )
-                        spawnBurst(primary.pos, if (isMerger) 60 else 30, Triple(1.0f, 0.65f, 0.3f), 3.0)
-                        postEvent(if (isMerger) "Black Hole Merger! Gravitational Waves Emitted" else "${primary.name} absorbed ${secondary.name}")
-                        continue
-                    }
+                    // Black Hole merger or absorption (Black Hole always consumes non-BH regardless of mass!)
+                    if (bi.type == BodyType.BLACK_HOLE || bj.type == BodyType.BLACK_HOLE) {
+                        val bhIsI = when {
+                            bi.type == BodyType.BLACK_HOLE && bj.type == BodyType.BLACK_HOLE -> bi.massSolar >= bj.massSolar
+                            bi.type == BodyType.BLACK_HOLE -> true
+                            else -> false
+                        }
+                        val bhBody = if (bhIsI) bi else bj
+                        val otherBody = if (bhIsI) bj else bi
+                        val bhSlot = if (bhIsI) i else j
+                        val otherSlot = if (bhIsI) j else i
 
-                    // Normal collision: check kinetic vs binding energy for fragmentation vs merge
-                    val reducedMass = (primary.massSolar * secondary.massSolar) / totalMass
-                    val kineticEnergy = 0.5 * reducedMass * relSpeed * relSpeed
-                    val bindingEnergy = AstroConstants.G_AU * primary.massSolar * secondary.massSolar / max(ri + rj, 1e-12)
-                    val isCatastrophic = kineticEnergy > bindingEnergy * 2.2 && secondary.massSolar > primary.massSolar * 0.08 && !primary.type.isLuminous
-
-                    // Impact normal in local planet space for crater placement
-                    val impactDir = if (sweptContact) {
-                        val oldPrimary = previousPositions[primary.id] ?: primary.pos
-                        val oldSecondary = previousPositions[secondary.id] ?: secondary.pos
-                        (oldSecondary - oldPrimary).normalized()
-                    } else {
-                        (secondary.pos - primary.pos).normalized()
-                    }
-                    val craterRadius = (0.18f + (secondary.radiusKm / primary.radiusKm).toFloat() * 0.45f).coerceIn(0.10f, 0.55f)
-                    val newCrater = CraterMark(
-                        nx = impactDir.x.toFloat(),
-                        ny = impactDir.y.toFloat(),
-                        nz = impactDir.z.toFloat(),
-                        radiusRad = craterRadius,
-                        heat = 1.0f
-                    )
-                    val updatedCraters = (primary.craters + newCrater).takeLast(8)
-
-                    val heatBump = (0.45f + (secondary.massSolar / primary.massSolar).toFloat() * 2.5f).coerceIn(0.35f, 1.0f)
-                    val newTemp = (primary.temperatureK + 1800.0 * heatBump).coerceAtMost(8500.0)
-                    val newRadiusKm = primary.radiusKm * cbrt(totalMass / primary.massSolar)
-
-                    removed[secondaryIdx] = true
-                    val mergedPrimary = primary.copy(
-                        massSolar = if (isCatastrophic) primary.massSolar * 0.85 else totalMass,
-                        radiusKm = if (isCatastrophic) primary.radiusKm * 0.94 else newRadiusKm,
-                        vel = comVel,
-                        temperatureK = newTemp,
-                        crustHeat = (primary.crustHeat + heatBump).coerceAtMost(1.0f),
-                        craters = updatedCraters
-                    )
-                    bodies[primaryIdx] = mergedPrimary
-                    if (primaryIsI) bi = mergedPrimary
-
-                    val impactPos = primary.pos + impactDir * primary.getVisualRadiusAu(config.trueScaleMode)
-                    spawnBurst(impactPos, if (isCatastrophic) 75 else 35, Triple(1.0f, 0.48f, 0.15f), relSpeed * 0.45 + 0.8)
-                    shockwaves.add(
-                        ShockwaveEvent(
-                            id = nextEntityId++,
-                            pos = impactPos,
-                            maxRadiusAu = (ri + rj) * (if (isCatastrophic) 8.0 else 4.0),
-                            ageSec = 0f,
-                            durationSec = 1.4f,
-                            color = Triple(1.0f, 0.52f, 0.18f)
-                        )
-                    )
-
-                    if (isCatastrophic && bodies.size + newlySpawned.size < 280) {
-                        val fragCount = 4
-                        val fragMass = (primary.massSolar * 0.15 + secondary.massSolar * 0.5) / fragCount
-                        for (f in 0 until fragCount) {
-                            val dir = Vec3d(
-                                rng.nextDouble() - 0.5,
-                                (rng.nextDouble() - 0.5) * 0.6,
-                                rng.nextDouble() - 0.5
-                            ).normalized()
-                            val offset = dir * (ri * 1.6)
-                            val ejectVel = comVel + dir * (relSpeed * 0.45 + 0.35)
-                            newlySpawned.add(
-                                CelestialBody(
-                                    id = nextEntityId++,
-                                    name = "${secondary.name} Fragment ${f + 1}",
-                                    type = BodyType.DEBRIS,
-                                    pos = primary.pos + offset,
-                                    vel = ejectVel,
-                                    massSolar = fragMass,
-                                    radiusKm = (secondary.radiusKm * 0.42).coerceAtLeast(180.0),
-                                    temperatureK = 2600.0,
-                                    crustHeat = 1.0f,
-                                    albedoColor = Triple(0.45f, 0.32f, 0.28f),
-                                    seed = rng.nextFloat() * 100f
+                        removed[otherSlot] = true
+                        val isMerger = otherBody.type == BodyType.BLACK_HOLE
+                        // Plunge capture seeds orbiting accretion parcels around BH so disk lights up realistically over time
+                        val rel = otherBody.pos - bhBody.pos
+                        val angMom = rel.cross(otherBody.vel - bhBody.vel)
+                        val diskN = if (angMom.lengthSq() > 1e-8) angMom.normalized() else bhBody.diskPlaneNormal
+                        val bhVisH = bhBody.getVisualRadiusAu(config.trueScaleMode) * 0.45
+                        val seededParcels = bhBody.accretionParcels.toMutableList()
+                        val addSlices = 6
+                        val sliceMass = (otherBody.massSolar / addSlices).coerceAtLeast(1e-6)
+                        for (k in 0 until addSlices) {
+                            if (seededParcels.size >= 96) break
+                            val ang = k * (PI / 3.0)
+                            val pDir = Vec3d(cos(ang), 0.0, sin(ang)).normalized()
+                            val tDir = diskN.cross(pDir).let { if (it.lengthSq() < 1e-8) Vec3d(0.0, 0.0, 1.0) else it.normalized() }
+                            val rOrb = bhVisH * (2.6 + (k % 3) * 0.5)
+                            val vKep = sqrt(AstroConstants.G_AU * max(totalMass, 0.5) / rOrb).coerceIn(1.5, 48.0)
+                            seededParcels.add(
+                                AccretionParcel(
+                                    relPos = pDir * rOrb,
+                                    relVel = tDir * (vKep * 0.92) - pDir * (vKep * 0.18),
+                                    massSolar = sliceMass,
+                                    temperatureK = max(otherBody.temperatureK, 8500.0)
                                 )
                             )
                         }
-                        postEvent("Catastrophic impact: ${secondary.name} shattered against ${primary.name}!")
-                    } else if (!primary.isBackgroundCluster && !secondary.isBackgroundCluster) {
-                        postEvent("${secondary.name} impacted ${primary.name}")
+                        val nextBins = bhBody.diskProfile.toMutableList().apply {
+                            val boost = if (isMerger) 0.9f else (0.35f + (otherBody.massSolar / bhBody.massSolar.coerceAtLeast(0.1)).toFloat() * 0.5f).coerceIn(0.25f, 1.2f)
+                            this[2] = (this[2] + boost * 0.65f).coerceAtMost(2.2f)
+                            this[3] = (this[3] + boost * 0.85f).coerceAtMost(2.2f)
+                        }
+                        val updated = bhBody.copy(
+                            massSolar = totalMass,
+                            absorbedMassSolar = bhBody.absorbedMassSolar + otherBody.massSolar,
+                            radiusKm = 2.95325 * totalMass,
+                            vel = comVel,
+                            diskPlaneNormal = (bhBody.diskPlaneNormal * 0.75 + diskN * 0.25).normalized(),
+                            diskProfile = nextBins,
+                            accretionParcels = seededParcels,
+                            accretionActivity = nextBins.maxOrNull() ?: bhBody.accretionActivity
+                        )
+                        bodies[bhSlot] = updated
+                        if (bhIsI) bi = updated
+                        if (isMerger || otherBody.massSolar >= 0.05) {
+                            shockwaves.add(
+                                ShockwaveEvent(
+                                    id = nextEntityId++,
+                                    pos = bhBody.pos,
+                                    maxRadiusAu = if (isMerger) 3.5 else 1.4,
+                                    ageSec = 0f,
+                                    durationSec = if (isMerger) 3.0f else 1.4f,
+                                    color = if (isMerger) Triple(0.70f, 0.45f, 1.0f) else Triple(1.0f, 0.72f, 0.35f),
+                                    isGravitationalWave = isMerger
+                                )
+                            )
+                        }
+                        if (isMerger) {
+                            spawnBurst(bhBody.pos, 50, Triple(0.75f, 0.55f, 1.0f), 3.0)
+                        }
+                        postEvent(if (isMerger) "Black Hole Merger! Gravitational Waves Emitted" else "${bhBody.name} absorbed ${otherBody.name}")
+                        continue
+                    }
+
+                    // Genuine Leinhardt & Stewart (2012) collision solver!
+                    val outcome = CollisionPhysics.resolveCollision(
+                        primary = primary,
+                        secondary = secondary,
+                        trueScaleMode = config.trueScaleMode,
+                        currentBodyCount = bodies.size + newlySpawned.size,
+                        maxTotalBodies = 285,
+                        nextIdAllocator = { nextEntityId++ },
+                        rng = rng
+                    )
+
+                    bodies[primaryIdx] = outcome.primaryUpdated
+                    if (primaryIsI) bi = outcome.primaryUpdated
+
+                    val secSurvived = outcome.secondaryUpdated
+                    if (secSurvived != null) {
+                        bodies[secondaryIdx] = secSurvived
+                    } else {
+                        removed[secondaryIdx] = true
+                    }
+
+                    newlySpawned.addAll(outcome.fragments)
+                    val room = (750 - particles.size).coerceAtLeast(0)
+                    if (room > 0 && outcome.particles.isNotEmpty()) {
+                        particles.addAll(outcome.particles.take(room))
+                    }
+                    outcome.shockwave?.let { shockwaves.add(it) }
+
+                    if (cinematicState.isActive &&
+                        (primary.id == cinematicState.primaryId || secondary.id == cinematicState.secondaryId ||
+                            primary.id == cinematicState.secondaryId || secondary.id == cinematicState.primaryId)
+                    ) {
+                        cinematicState = cinematicState.copy(
+                            impactOccurred = true,
+                            phase = if (outcome.fragments.isNotEmpty() || outcome.particles.size > 40)
+                                CinematicPhase.CLOSE_IMPACT else CinematicPhase.FRAGMENT_TRACK,
+                            primaryId = outcome.primaryUpdated.id,
+                            secondaryId = secSurvived?.id ?: -1L,
+                            impactPos = outcome.impactPos,
+                            impactNormal = outcome.impactNormal,
+                            timerAfterImpactSec = 0f,
+                            summaryBanner = outcome.eventMessage
+                        )
+                    }
+
+                    if (!primary.isBackgroundCluster && !secondary.isBackgroundCluster) {
+                        postEvent(outcome.eventMessage)
                     }
                 }
             }
@@ -724,7 +991,7 @@ class PhysicsEngine {
                 b.craters.map { it.copy(heat = (it.heat - coolRate * 0.8f).coerceAtLeast(0f)) }
             } else b.craters
 
-            // Radiative equilibrium temperature from active stars (only for non-luminous bodies)
+            // Radiative equilibrium temperature from active stars + atmospheric greenhouse warming
             var eqTemp = b.temperatureK
             if (!b.type.isLuminous && b.type != BodyType.BLACK_HOLE && stars.isNotEmpty()) {
                 var fluxSum = 0.0
@@ -732,15 +999,19 @@ class PhysicsEngine {
                     val d2 = (b.pos - s.pos).lengthSq().coerceAtLeast(1e-4)
                     fluxSum += s.luminositySolar / d2
                 }
-                val targetEq = (278.0 * fluxSum.pow(0.25)).coerceIn(30.0, 4500.0)
+                val greenhouse = 1.0 + b.atmosphereDensity.toDouble().coerceAtLeast(0.0) * 0.22
+                val targetEq = (278.0 * greenhouse * fluxSum.pow(0.25)).coerceIn(30.0, 5200.0)
                 val targetWithLava = targetEq + newCrustHeat * 1800.0
                 eqTemp = b.temperatureK + (targetWithLava - b.temperatureK) * (realDtSec * 0.45).coerceIn(0.0, 0.25)
             }
 
-            // Decay accretion activity gently when nothing is falling in
+            // Dynamic black hole disk emission comes directly from simulated AccretionParcel evolution
             val newAccretion = if (b.type == BodyType.BLACK_HOLE) {
-                (b.accretionActivity - 0.12f * realDtSec.toFloat()).coerceAtLeast(0.25f)
+                b.diskProfile.maxOrNull()?.coerceIn(0f, 2.5f) ?: 0f
             } else 0f
+
+            val nextDeform = (b.impactDeformAmount - 0.14f * realDtSec.toFloat()).coerceAtLeast(0f)
+            val nextShockAge = if (b.impactShockAge < 12f) b.impactShockAge + realDtSec.toFloat() else b.impactShockAge
 
             // Record orbit trail point if moved meaningfully
             val newTrail = if (!b.isBackgroundCluster && config.showOrbits) {
@@ -756,6 +1027,8 @@ class PhysicsEngine {
                 craters = newCraters,
                 temperatureK = eqTemp,
                 accretionActivity = newAccretion,
+                impactDeformAmount = nextDeform,
+                impactShockAge = nextShockAge,
                 trail = newTrail
             )
         }
@@ -1096,6 +1369,34 @@ class PhysicsEngine {
             rocheAu = 2.44 * dominant.physicsRadiusAu * cbrt(rhoRatio)
         }
 
+        val status = when {
+            body.tidalStretchAmount > 0.18f || body.tidalStress > 0.12f ->
+                "Spaghettifying into Black Hole (${(body.tidalStress * 100).toInt()}% stress)"
+            body.type == BodyType.BLACK_HOLE && body.accretionActivity > 0.7f ->
+                "Active Quasar Accretion • Polar Jets"
+            body.type == BodyType.BLACK_HOLE && body.absorbedMassSolar > 1e-4 ->
+                "Accreting Matter (+${String.format("%.2f", body.absorbedMassSolar)} M☉)"
+            body.type == BodyType.BLACK_HOLE ->
+                "Event Horizon • Gravitational Lens"
+            body.type == BodyType.RED_GIANT || body.evolutionStage == EvolutionStage.RED_GIANT ->
+                "Red Giant Envelope Expansion"
+            body.type == BodyType.WHITE_DWARF ->
+                "Degenerate White Dwarf Remnant"
+            body.type == BodyType.NEUTRON_STAR ->
+                "Rapidly Spinning Pulsar Remnant"
+            body.type == BodyType.STAR && body.temperatureK > 15000 ->
+                "Hot Luminous Star (${body.temperatureK.toInt()} K)"
+            body.type == BodyType.STAR ->
+                "Main Sequence Fusion (${body.temperatureK.toInt()} K)"
+            body.crustHeat > 0.25f || (!body.type.isLuminous && body.temperatureK > 900.0) ->
+                "Molten Crust (${body.temperatureK.toInt()} K)"
+            dominant != null && semiMajorAu == null ->
+                "Hyperbolic Escape Trajectory"
+            body.type == BodyType.EARTH_LIKE && body.temperatureK in 240.0..325.0 ->
+                "Habitable Zone • Liquid Water"
+            else -> "Stable Keplerian Orbit"
+        }
+
         return BodyTelemetry(
             body = body,
             speedKmS = speedKmS,
@@ -1106,7 +1407,8 @@ class PhysicsEngine {
             semiMajorAxisAu = semiMajorAu,
             eccentricity = ecc,
             rocheLimitAu = rocheAu,
-            schwarzschildKm = body.schwarzschildRadiusKm()
+            schwarzschildKm = body.schwarzschildRadiusKm(),
+            statusSummary = status
         )
     }
 
@@ -1137,6 +1439,15 @@ class PhysicsEngine {
         gammaBursts.replaceAll { it.copy(ageSec = it.ageSec + dtSec) }
         gammaBursts.removeAll { it.ageSec >= it.durationSec }
 
+        val gravAttractors = if (particles.isNotEmpty() && !config.isPaused) {
+            bodies.filter { !it.isBackgroundCluster && it.massSolar > 1e-11 }
+                .sortedByDescending { it.massSolar }
+                .take(6)
+        } else emptyList()
+
+        // Scale N-body particle gravity cleanly to match 0.14*vel_AU_yr real-sec ballistic scale
+        val gParticles = AstroConstants.G_AU * 0.02
+
         val iter = particles.iterator()
         while (iter.hasNext()) {
             val p = iter.next()
@@ -1145,7 +1456,6 @@ class PhysicsEngine {
                 iter.remove()
                 continue
             }
-            // If spiraling into a black hole, apply inward centripetal pull
             if (p.targetBlackHoleId != -1L) {
                 val bh = bodies.firstOrNull { it.id == p.targetBlackHoleId }
                 if (bh != null) {
@@ -1158,10 +1468,564 @@ class PhysicsEngine {
                     p.vy += (dy / d) * pull * dtSec
                     p.vz += (dz / d) * pull * dtSec
                 }
+            } else if (p.affectedByGravity && !config.isPaused && gravAttractors.isNotEmpty()) {
+                for (att in gravAttractors) {
+                    val dx = att.pos.x - p.x
+                    val dy = att.pos.y - p.y
+                    val dz = att.pos.z - p.z
+                    val rVis = att.getVisualRadiusAu(config.trueScaleMode)
+                    val soft2 = (rVis * 0.95).coerceAtLeast(0.008).let { it * it }
+                    val r2 = dx * dx + dy * dy + dz * dz + soft2
+                    val invR = 1.0 / sqrt(r2)
+                    val invR3 = invR * invR * invR
+                    val pull = gParticles * att.massSolar * invR3
+                    p.vx += dx * pull * dtSec
+                    p.vy += dy * pull * dtSec
+                    p.vz += dz * pull * dtSec
+                }
             }
             p.x += p.vx * dtSec
             p.y += p.vy * dtSec
             p.z += p.vz * dtSec
+        }
+    }
+
+    // ==================== COLLISION SCENARIO LAUNCHER & CINEMATIC DIRECTOR ====================
+
+    @Synchronized
+    fun computeCircularOrbitVelocityForParent(pos: Vec3d, parentId: Long?): Vec3d {
+        val parent = parentId?.let { id -> bodies.firstOrNull { it.id == id } }
+            ?: bodies.filter { !it.isBackgroundCluster }.maxByOrNull { it.massSolar / (pos - it.pos).lengthSq().coerceAtLeast(1e-6) }
+            ?: return Vec3d.ZERO
+        val rel = pos - parent.pos
+        val r = rel.length().coerceAtLeast(0.05)
+        val speed = sqrt(AstroConstants.G_AU * parent.massSolar / r)
+        val tangent = Vec3d(-rel.z, 0.0, rel.x).normalized()
+        return parent.vel + tangent * speed
+    }
+
+    @Synchronized
+    fun launchCollisionScenario(
+        bodyAId: Long,
+        bodyBId: Long,
+        impactAngleDeg: Double,
+        speedVsEscapeRatio: Double,
+        startCinematic: Boolean = true
+    ): Boolean {
+        if (bodyAId == bodyBId) return false
+        val idxA = bodies.indexOfFirst { it.id == bodyAId }
+        val idxB = bodies.indexOfFirst { it.id == bodyBId }
+        if (idxA < 0 || idxB < 0) return false
+
+        val plan = CollisionPhysics.computeCollisionApproachState(
+            target = bodies[idxA],
+            impactor = bodies[idxB],
+            separationMult = 4.2,
+            impactAngleDeg = impactAngleDeg,
+            speedVsEscapeRatio = speedVsEscapeRatio,
+            trueScaleMode = config.trueScaleMode
+        )
+
+        bodies[idxA] = plan.bodyA
+        bodies[idxB] = plan.bodyB
+
+        val desiredTimeScale = (plan.etaTimeYears / 3.2).coerceIn(0.0005, 0.25)
+        config = config.copy(isPaused = false, isRewinding = false, timeScaleYearsPerSec = desiredTimeScale)
+
+        cinematicInitialSnapshot = createSnapshot("CollisionReplay")
+        if (startCinematic) {
+            cinematicState = CinematicDirectorState(
+                isActive = true,
+                isPaused = false,
+                playbackSpeed = 1.0f,
+                perspective = CinematicPerspective.AUTO,
+                phase = CinematicPhase.WIDE_APPROACH,
+                primaryId = plan.bodyA.id,
+                secondaryId = plan.bodyB.id,
+                impactOccurred = false,
+                summaryBanner = "${plan.bodyA.name} vs ${plan.bodyB.name} • ${impactAngleDeg.toInt()}° @ ${String.format("%.1f", speedVsEscapeRatio)}× v_esc"
+            )
+            updateCinematicDirector(0.0)
+        }
+        postEvent("Collision course set: ${plan.bodyA.name} vs ${plan.bodyB.name}")
+        return true
+    }
+
+    @Synchronized
+    fun launchPresetCollisionScenario(
+        preset: CollisionScenarioPreset,
+        impactAngleDeg: Double = preset.defaultAngleDeg.toDouble(),
+        speedVsEscapeRatio: Double = preset.defaultSpeedRatio.toDouble(),
+        startCinematic: Boolean = true
+    ) {
+        val baseSun = CelestialBody(
+            id = 1L, name = "Host Star", type = BodyType.STAR, spectralClass = SpectralClass.G,
+            pos = Vec3d(-2.5, 0.0, 0.0), vel = Vec3d.ZERO, massSolar = 1.0, radiusKm = 696_340.0,
+            temperatureK = 5778.0, luminositySolar = 1.0, albedoColor = kelvinToRgb(5778.0)
+        )
+        val (rawA, rawB) = when (preset) {
+            CollisionScenarioPreset.EARTH_THEIA -> {
+                val e = CelestialBody(
+                    id = 2L, name = "Proto-Earth", type = BodyType.EARTH_LIKE, archetype = BodyArchetype.EARTH,
+                    pos = Vec3d.ZERO, vel = Vec3d.ZERO, massSolar = AstroConstants.EARTH_MASS_SOLAR, radiusKm = 6371.0,
+                    temperatureK = 288.0, atmosphereDensity = 0.65f, atmosphereColor = Triple(0.28f, 0.62f, 1.0f),
+                    albedoColor = Triple(0.20f, 0.48f, 0.82f), hasClouds = true
+                )
+                val t = CelestialBody(
+                    id = 3L, name = "Theia", type = BodyType.TERRESTRIAL_PLANET, archetype = BodyArchetype.MARS,
+                    pos = Vec3d(0.25, 0.0, 0.0), vel = Vec3d.ZERO, massSolar = 0.14 * AstroConstants.EARTH_MASS_SOLAR,
+                    radiusKm = 3450.0, temperatureK = 260.0, atmosphereDensity = 0.2f,
+                    atmosphereColor = Triple(0.88f, 0.48f, 0.30f), albedoColor = Triple(0.76f, 0.36f, 0.22f)
+                )
+                e to t
+            }
+            CollisionScenarioPreset.ROCKY_HEAD_ON -> {
+                val a = CelestialBody(
+                    id = 2L, name = "Terra Alpha", type = BodyType.EARTH_LIKE, archetype = BodyArchetype.EARTH,
+                    pos = Vec3d.ZERO, vel = Vec3d.ZERO, massSolar = 1.2 * AstroConstants.EARTH_MASS_SOLAR, radiusKm = 6750.0,
+                    temperatureK = 290.0, atmosphereDensity = 0.6f, albedoColor = Triple(0.22f, 0.50f, 0.84f), hasClouds = true
+                )
+                val b = CelestialBody(
+                    id = 3L, name = "Terra Beta", type = BodyType.TERRESTRIAL_PLANET, archetype = BodyArchetype.MERCURY,
+                    pos = Vec3d(0.25, 0.0, 0.0), vel = Vec3d.ZERO, massSolar = 0.9 * AstroConstants.EARTH_MASS_SOLAR,
+                    radiusKm = 5900.0, temperatureK = 310.0, albedoColor = Triple(0.62f, 0.56f, 0.52f)
+                )
+                a to b
+            }
+            CollisionScenarioPreset.GRAZING_WORLDS -> {
+                val a = CelestialBody(
+                    id = 2L, name = "Gaia Prime", type = BodyType.EARTH_LIKE, archetype = BodyArchetype.EARTH,
+                    pos = Vec3d.ZERO, vel = Vec3d.ZERO, massSolar = 1.4 * AstroConstants.EARTH_MASS_SOLAR, radiusKm = 6950.0,
+                    temperatureK = 286.0, atmosphereDensity = 0.65f, albedoColor = Triple(0.20f, 0.48f, 0.82f), hasClouds = true
+                )
+                val b = CelestialBody(
+                    id = 3L, name = "Ares Impactor", type = BodyType.TERRESTRIAL_PLANET, archetype = BodyArchetype.MARS,
+                    pos = Vec3d(0.25, 0.0, 0.0), vel = Vec3d.ZERO, massSolar = 0.55 * AstroConstants.EARTH_MASS_SOLAR,
+                    radiusKm = 5200.0, temperatureK = 240.0, albedoColor = Triple(0.78f, 0.38f, 0.24f)
+                )
+                a to b
+            }
+            CollisionScenarioPreset.GIANT_ABSORPTION -> {
+                val a = CelestialBody(
+                    id = 2L, name = "Jupiter", type = BodyType.GAS_GIANT, archetype = BodyArchetype.JUPITER,
+                    pos = Vec3d.ZERO, vel = Vec3d.ZERO, massSolar = AstroConstants.JUPITER_MASS_SOLAR, radiusKm = 69911.0,
+                    temperatureK = 165.0, atmosphereDensity = 0.45f, albedoColor = Triple(0.84f, 0.66f, 0.48f)
+                )
+                val b = CelestialBody(
+                    id = 3L, name = "Super-Earth", type = BodyType.EARTH_LIKE, archetype = BodyArchetype.EARTH,
+                    pos = Vec3d(0.7, 0.0, 0.0), vel = Vec3d.ZERO, massSolar = 4.5 * AstroConstants.EARTH_MASS_SOLAR,
+                    radiusKm = 10200.0, temperatureK = 295.0, atmosphereDensity = 0.8f, albedoColor = Triple(0.25f, 0.55f, 0.85f), hasClouds = true
+                )
+                a to b
+            }
+        }
+
+        val snap = SimulationSnapshot(
+            name = preset.title,
+            presetId = "collision_${preset.id}",
+            elapsedYears = 0.0,
+            bodies = listOf(baseSun, rawA, rawB),
+            config = SimulationConfig(isPaused = false, timeScaleYearsPerSec = 0.015, showOrbits = true)
+        )
+        loadSnapshot(snap, resetCinematic = true)
+        launchCollisionScenario(2L, 3L, impactAngleDeg, speedVsEscapeRatio, startCinematic)
+    }
+
+    @Synchronized
+    fun startCinematicShowcase(targetId: Long? = null) {
+        if (cinematicState.isActive) return
+        val primary = targetId?.let { id -> bodies.firstOrNull { it.id == id } } ?: bodies.firstOrNull() ?: return
+        val secondary = bodies.filter { it.id != primary.id && !it.isBackgroundCluster }
+            .minByOrNull { (it.pos - primary.pos).lengthSq() }
+        cinematicState = CinematicDirectorState(
+            isActive = true,
+            isPaused = config.isPaused,
+            playbackSpeed = 1.0f,
+            perspective = CinematicPerspective.WIDE_APPROACH,
+            phase = CinematicPhase.WIDE_APPROACH,
+            primaryId = primary.id,
+            secondaryId = secondary?.id ?: -1L,
+            impactOccurred = false,
+            summaryBanner = if (secondary != null) "Tracking ${primary.name} & ${secondary.name}" else "Tracking ${primary.name}"
+        )
+        updateCinematicDirector(0.0)
+    }
+
+    @Synchronized
+    fun setCinematicPaused(paused: Boolean) {
+        if (!cinematicState.isActive) return
+        cinematicState = cinematicState.copy(isPaused = paused)
+    }
+
+    @Synchronized
+    fun setCinematicPlaybackSpeed(speed: Float) {
+        if (!cinematicState.isActive) return
+        cinematicState = cinematicState.copy(playbackSpeed = speed.coerceIn(0.25f, 2.0f))
+    }
+
+    @Synchronized
+    fun setCinematicPerspective(p: CinematicPerspective) {
+        if (!cinematicState.isActive) return
+        cinematicState = cinematicState.copy(perspective = p)
+        updateCinematicDirector(0.0)
+    }
+
+    @Synchronized
+    fun replayCinematicCollision() {
+        val snap = cinematicInitialSnapshot ?: return
+        val prevSpeed = cinematicState.playbackSpeed
+        val prevPersp = cinematicState.perspective
+        val bodyA = snap.bodies.getOrNull(1) ?: snap.bodies.firstOrNull()
+        val bodyB = snap.bodies.getOrNull(2)
+        loadSnapshot(snap, resetCinematic = false)
+        cinematicState = CinematicDirectorState(
+            isActive = true,
+            isPaused = false,
+            playbackSpeed = prevSpeed,
+            perspective = prevPersp,
+            phase = CinematicPhase.WIDE_APPROACH,
+            primaryId = bodyA?.id ?: 2L,
+            secondaryId = bodyB?.id ?: 3L,
+            impactOccurred = false,
+            timerAfterImpactSec = 0f,
+            summaryBanner = "Replaying collision scenario"
+        )
+        updateCinematicDirector(0.0)
+    }
+
+    @Synchronized
+    fun exitCinematicMode() {
+        cinematicState = CinematicDirectorState()
+    }
+
+    private fun updateCinematicDirector(dtScaled: Double) {
+        val b1 = bodies.firstOrNull { it.id == cinematicState.primaryId }
+            ?: bodies.firstOrNull { !it.isBackgroundCluster }
+        val b2 = bodies.firstOrNull { it.id == cinematicState.secondaryId }
+
+        val nextTimer = if (cinematicState.impactOccurred) cinematicState.timerAfterImpactSec + dtScaled.toFloat() else 0f
+
+        // Compute deterministic event phase from physical separation or post-impact timer
+        val autoPhase = if (!cinematicState.impactOccurred) {
+            if (b1 != null && b2 != null) {
+                val sep = (b2.pos - b1.pos).length()
+                val sumR = (b1.getVisualRadiusAu(config.trueScaleMode) + b2.getVisualRadiusAu(config.trueScaleMode)).coerceAtLeast(0.01)
+                if (sep < sumR * 2.55) CinematicPhase.CLOSE_IMPACT else CinematicPhase.WIDE_APPROACH
+            } else CinematicPhase.FRAGMENT_TRACK
+        } else {
+            when {
+                nextTimer < 1.5f -> CinematicPhase.CLOSE_IMPACT
+                nextTimer < 4.4f -> CinematicPhase.EJECTA_PLUME
+                nextTimer < 8.5f -> CinematicPhase.FRAGMENT_TRACK
+                else -> CinematicPhase.DEBRIS_WIDE
+            }
+        }
+
+        val activeView = when (cinematicState.perspective) {
+            CinematicPerspective.AUTO -> autoPhase
+            CinematicPerspective.WIDE_APPROACH -> CinematicPhase.WIDE_APPROACH
+            CinematicPerspective.CLOSE_IMPACT -> CinematicPhase.CLOSE_IMPACT
+            CinematicPerspective.EJECTA_PLUME -> CinematicPhase.EJECTA_PLUME
+            CinematicPerspective.FRAGMENT_TRACK -> CinematicPhase.FRAGMENT_TRACK
+        }
+
+        val goal: CinematicCameraGoal? = when {
+            b1 != null && b2 != null && !cinematicState.impactOccurred -> {
+                val totalM = b1.massSolar + b2.massSolar
+                val mid = (b1.pos * b1.massSolar + b2.pos * b2.massSolar) / totalM.coerceAtLeast(1e-18)
+                val sepVec = b2.pos - b1.pos
+                val sep = sepVec.length().coerceAtLeast(0.02)
+                val sumR = (b1.getVisualRadiusAu(config.trueScaleMode) + b2.getVisualRadiusAu(config.trueScaleMode)).coerceAtLeast(0.015)
+                val approachYaw = Math.toDegrees(atan2(sepVec.x, sepVec.z)).toFloat() + 62f
+                when (activeView) {
+                    CinematicPhase.WIDE_APPROACH -> CinematicCameraGoal(
+                        lookAtPos = mid,
+                        yawDeg = approachYaw,
+                        pitchDeg = 22f,
+                        distanceAu = (sep * 2.25).coerceIn(sumR * 3.8, 12.0)
+                    )
+                    CinematicPhase.CLOSE_IMPACT -> CinematicCameraGoal(
+                        lookAtPos = mid,
+                        yawDeg = approachYaw + 18f,
+                        pitchDeg = 14f,
+                        distanceAu = (sumR * 4.4).coerceIn(0.04, 5.0)
+                    )
+                    else -> CinematicCameraGoal(
+                        lookAtPos = mid,
+                        yawDeg = approachYaw + 34f,
+                        pitchDeg = 28f,
+                        distanceAu = (sep * 2.4).coerceIn(sumR * 4.8, 14.0)
+                    )
+                }
+            }
+            b1 != null -> {
+                val r1 = b1.getVisualRadiusAu(config.trueScaleMode).coerceAtLeast(0.015)
+                val impYaw = Math.toDegrees(atan2(cinematicState.impactNormal.x, cinematicState.impactNormal.z)).toFloat()
+                when (activeView) {
+                    CinematicPhase.CLOSE_IMPACT -> CinematicCameraGoal(
+                        lookAtPos = if (cinematicState.impactOccurred) (b1.pos * 0.65 + cinematicState.impactPos * 0.35) else b1.pos,
+                        yawDeg = impYaw + 32f,
+                        pitchDeg = 16f,
+                        distanceAu = (r1 * 4.6).coerceIn(0.04, 4.5)
+                    )
+                    CinematicPhase.EJECTA_PLUME -> CinematicCameraGoal(
+                        lookAtPos = b1.pos + cinematicState.impactNormal * (r1 * 1.1),
+                        yawDeg = impYaw + 68f,
+                        pitchDeg = 20f,
+                        distanceAu = (r1 * 7.8).coerceIn(0.08, 8.0)
+                    )
+                    CinematicPhase.FRAGMENT_TRACK -> {
+                        val rem = bodies.firstOrNull { it.type == BodyType.DEBRIS } ?: b2 ?: b1
+                        val focus = (b1.pos + rem.pos) * 0.5
+                        val span = ((rem.pos - b1.pos).length() * 2.2).coerceAtLeast(r1 * 6.5)
+                        CinematicCameraGoal(
+                            lookAtPos = focus,
+                            yawDeg = impYaw + 50f + nextTimer * 4.5f,
+                            pitchDeg = 26f,
+                            distanceAu = span.coerceIn(0.08, 14.0)
+                        )
+                    }
+                    else -> CinematicCameraGoal(
+                        lookAtPos = b1.pos,
+                        yawDeg = impYaw + 45f + nextTimer * 3.0f,
+                        pitchDeg = 34f,
+                        distanceAu = (r1 * 12.0).coerceIn(0.14, 18.0)
+                    )
+                }
+            }
+            else -> null
+        }
+
+        cinematicState = cinematicState.copy(
+            phase = autoPhase,
+            timerAfterImpactSec = nextTimer,
+            cameraGoal = goal
+        )
+    }
+
+    companion object {
+        fun spectralClassForTemp(tempK: Double): SpectralClass = when {
+            tempK >= 25000.0 -> SpectralClass.O
+            tempK >= 10000.0 -> SpectralClass.B
+            tempK >= 7500.0 -> SpectralClass.A
+            tempK >= 6000.0 -> SpectralClass.F
+            tempK >= 5200.0 -> SpectralClass.G
+            tempK >= 3700.0 -> SpectralClass.K
+            else -> SpectralClass.M
+        }
+
+        /**
+         * Couples live property edits to real astrophysical scaling laws and phase transitions:
+         * - Star Mass <-> Luminosity (M^3.5), Radius (M^0.8), Temperature (Stefan-Boltzmann), Spectral Class, & Red Giant / BH collapse
+         * - White Dwarf (>1.44 M_sun Chandrasekhar) -> Neutron Star; Neutron Star (>2.8 M_sun TOV) -> Black Hole
+         * - Planet Mass (>15 M_earth -> Gas Giant; >0.08 M_sun -> M-Dwarf Star ignition)
+         * - Atmosphere <-> Greenhouse temperature boost; Temperature <-> Magma crust / Ice freeze states
+         */
+        fun applyCoupledAstrophysics(
+            original: CelestialBody,
+            edited: CelestialBody,
+            scaleRadiusWithMass: Boolean = true
+        ): Pair<CelestialBody, String?> {
+            if (original.type == BodyType.BLACK_HOLE) {
+                val m = edited.massSolar.coerceAtLeast(0.05)
+                return edited.copy(
+                    massSolar = m,
+                    radiusKm = 2.95325 * m,
+                    temperatureK = 0.0,
+                    luminositySolar = 0.0
+                ) to null
+            }
+
+            val massChanged = abs(edited.massSolar - original.massSolar) > max(1e-18, original.massSolar * 1e-4)
+            val radiusChanged = abs(edited.radiusKm - original.radiusKm) > max(1e-3, original.radiusKm * 1e-4)
+            val tempChanged = abs(edited.temperatureK - original.temperatureK) > 0.5
+            val lumChanged = abs(edited.luminositySolar - original.luminositySolar) > max(1e-5, original.luminositySolar * 1e-4)
+            val atmoChanged = abs(edited.atmosphereDensity - original.atmosphereDensity) > 0.005f
+
+            if (original.type.isLuminous) {
+                val m = edited.massSolar.coerceAtLeast(0.08)
+
+                // Compact remnant & hypermassive collapse thresholds
+                if (original.type == BodyType.WHITE_DWARF && m > 1.44) {
+                    return edited.copy(
+                        type = BodyType.NEUTRON_STAR,
+                        spectralClass = SpectralClass.NONE,
+                        massSolar = m,
+                        radiusKm = 12.0,
+                        temperatureK = 180_000.0,
+                        luminositySolar = 0.5,
+                        albedoColor = Triple(0.62f, 0.85f, 1.0f),
+                        evolutionStage = EvolutionStage.NEUTRON_STAR
+                    ) to "${original.name} crossed Chandrasekhar limit (1.44 M☉) → Neutron Star!"
+                }
+                if (original.type == BodyType.NEUTRON_STAR && m > 2.8) {
+                    return edited.copy(
+                        type = BodyType.BLACK_HOLE,
+                        spectralClass = SpectralClass.NONE,
+                        massSolar = m,
+                        radiusKm = 2.95325 * m,
+                        temperatureK = 0.0,
+                        luminositySolar = 0.0,
+                        accretionActivity = 0.45f,
+                        evolutionStage = EvolutionStage.BLACK_HOLE
+                    ) to "${original.name} crossed TOV limit (2.8 M☉) → Black Hole!"
+                }
+                if ((original.type == BodyType.STAR || original.type == BodyType.RED_GIANT) && m >= 120.0) {
+                    return edited.copy(
+                        type = BodyType.BLACK_HOLE,
+                        spectralClass = SpectralClass.NONE,
+                        massSolar = m,
+                        radiusKm = 2.95325 * m,
+                        temperatureK = 0.0,
+                        luminositySolar = 0.0,
+                        accretionActivity = 0.55f,
+                        evolutionStage = EvolutionStage.BLACK_HOLE
+                    ) to "${original.name} exceeded Eddington mass (120 M☉) → Black Hole!"
+                }
+
+                // Main Sequence / Red Giant coupled scaling
+                if (massChanged && (original.type == BodyType.STAR || original.type == BodyType.RED_GIANT)) {
+                    val newLum = if (original.type == BodyType.RED_GIANT) {
+                        (m.pow(3.5) * 35.0).coerceIn(10.0, 2_500_000.0)
+                    } else {
+                        m.pow(3.5).coerceIn(1e-4, 2_000_000.0)
+                    }
+                    val newRadKm = if (scaleRadiusWithMass) {
+                        val baseRad = 696_340.0 * m.pow(0.8)
+                        if (original.type == BodyType.RED_GIANT) (baseRad * 12.0).coerceAtLeast(3_500_000.0)
+                        else baseRad.coerceIn(30_000.0, 45_000_000.0)
+                    } else edited.radiusKm
+                    val rSolar = (newRadKm / 696_340.0).coerceAtLeast(0.05)
+                    val rawTemp = 5778.0 * (newLum / (rSolar * rSolar)).pow(0.25)
+                    val newTemp = rawTemp.coerceIn(2400.0, 52000.0)
+                    val spec = spectralClassForTemp(newTemp)
+                    val msg = if (spec != original.spectralClass) "${original.name} is now ${spec.label} (${newTemp.toInt()} K)" else null
+                    return edited.copy(
+                        massSolar = m,
+                        radiusKm = newRadKm,
+                        luminositySolar = newLum,
+                        temperatureK = newTemp,
+                        spectralClass = spec,
+                        albedoColor = kelvinToRgb(newTemp),
+                        initialMassSolar = max(original.initialMassSolar, m)
+                    ) to msg
+                }
+
+                if (lumChanged) {
+                    val newLum = edited.luminositySolar.coerceIn(1e-4, 5_000_000.0)
+                    val rSolar0 = (edited.radiusKm / 696_340.0).coerceAtLeast(0.01)
+                    val ratio = (newLum / original.luminositySolar.coerceAtLeast(1e-4)).coerceIn(1e-4, 1e6)
+                    val newTemp = (original.temperatureK * ratio.pow(0.18)).coerceIn(2400.0, 52000.0)
+                    val newRadKm = (edited.radiusKm * ratio.pow(0.14)).coerceIn(7000.0, 60_000_000.0)
+                    val becomeGiant = original.type == BodyType.STAR && newRadKm > 3_500_000.0 && newTemp < 4200.0
+                    val spec = spectralClassForTemp(newTemp)
+                    return edited.copy(
+                        type = if (becomeGiant) BodyType.RED_GIANT else edited.type,
+                        luminositySolar = newLum,
+                        temperatureK = newTemp,
+                        radiusKm = newRadKm,
+                        spectralClass = spec,
+                        albedoColor = kelvinToRgb(newTemp)
+                    ) to (if (becomeGiant) "${original.name} puffed into a Red Giant!" else null)
+                }
+
+                if (tempChanged) {
+                    val newTemp = edited.temperatureK.coerceIn(1800.0, 250_000.0)
+                    val rSolar = (edited.radiusKm / 696_340.0).coerceAtLeast(1e-4)
+                    val newLum = (rSolar * rSolar * (newTemp / 5778.0).pow(4.0)).coerceIn(1e-5, 5_000_000.0)
+                    val spec = if (edited.type == BodyType.STAR || edited.type == BodyType.RED_GIANT) spectralClassForTemp(newTemp) else edited.spectralClass
+                    return edited.copy(
+                        temperatureK = newTemp,
+                        luminositySolar = newLum,
+                        spectralClass = spec,
+                        albedoColor = kelvinToRgb(newTemp)
+                    ) to null
+                }
+
+                if (radiusChanged) {
+                    val newRadKm = edited.radiusKm.coerceAtLeast(5.0)
+                    val becomeGiant = original.type == BodyType.STAR && newRadKm > 3_200_000.0 && original.massSolar < 8.0
+                    val rSolar = (newRadKm / 696_340.0).coerceAtLeast(1e-4)
+                    val newTemp = if (becomeGiant) 3400.0 else edited.temperatureK
+                    val newLum = (rSolar * rSolar * (newTemp / 5778.0).pow(4.0)).coerceIn(1e-5, 5_000_000.0)
+                    return edited.copy(
+                        type = if (becomeGiant) BodyType.RED_GIANT else edited.type,
+                        radiusKm = newRadKm,
+                        temperatureK = newTemp,
+                        luminositySolar = newLum,
+                        albedoColor = kelvinToRgb(newTemp),
+                        evolutionStage = if (becomeGiant) EvolutionStage.RED_GIANT else edited.evolutionStage
+                    ) to (if (becomeGiant) "${original.name} expanded into a Red Giant!" else null)
+                }
+
+                return edited to null
+            }
+
+            // Non-luminous bodies (Planets, Moons, Dwarf Planets, Asteroids)
+            if (massChanged) {
+                val m = edited.massSolar.coerceAtLeast(1e-16)
+                // Brown dwarf -> Red Dwarf hydrogen ignition threshold at 0.08 M_sun!
+                if (m >= 0.08) {
+                    val newLum = m.pow(3.5).coerceAtLeast(0.005)
+                    val newRadKm = 696_340.0 * m.pow(0.8)
+                    return edited.copy(
+                        type = BodyType.STAR,
+                        spectralClass = SpectralClass.M,
+                        massSolar = m,
+                        radiusKm = newRadKm,
+                        temperatureK = 3100.0,
+                        luminositySolar = newLum,
+                        albedoColor = kelvinToRgb(3100.0),
+                        crustHeat = 0f,
+                        atmosphereDensity = 0f,
+                        hasClouds = false,
+                        hasCityLights = false,
+                        evolutionStage = EvolutionStage.MAIN_SEQUENCE
+                    ) to "${original.name} ignited hydrogen fusion → Red Dwarf Star!"
+                }
+
+                val isRocky = original.type == BodyType.TERRESTRIAL_PLANET ||
+                    original.type == BodyType.EARTH_LIKE ||
+                    original.type == BodyType.DWARF_PLANET ||
+                    original.type == BodyType.MOON ||
+                    original.type == BodyType.ASTEROID
+
+                val newRadKm = if (scaleRadiusWithMass && !radiusChanged) {
+                    (original.radiusKm * cbrt((m / original.massSolar.coerceAtLeast(1e-16)).coerceIn(1e-6, 1e6))).coerceIn(10.0, 220_000.0)
+                } else edited.radiusKm
+
+                if (isRocky && m > 15.0 * AstroConstants.EARTH_MASS_SOLAR) {
+                    return edited.copy(
+                        type = BodyType.GAS_GIANT,
+                        archetype = BodyArchetype.GENERIC_GAS,
+                        massSolar = m,
+                        radiusKm = max(newRadKm, 46_000.0),
+                        atmosphereDensity = max(edited.atmosphereDensity, 0.55f),
+                        albedoColor = Triple(0.82f, 0.66f, 0.48f),
+                        hasCityLights = false
+                    ) to "${original.name} grew past 15 M⊕ and accreted H/He → Gas Giant!"
+                }
+
+                return edited.copy(massSolar = m, radiusKm = newRadKm) to null
+            }
+
+            if (atmoChanged && !tempChanged) {
+                val deltaAtmo = edited.atmosphereDensity - original.atmosphereDensity
+                val newTemp = (edited.temperatureK + deltaAtmo * 95.0).coerceIn(25.0, 5000.0)
+                return edited.copy(temperatureK = newTemp) to null
+            }
+
+            if (tempChanged) {
+                val t = edited.temperatureK.coerceAtLeast(1.0)
+                val nextCrustHeat = if (t > 1050.0) {
+                    ((t - 1050.0) / 2400.0).toFloat().coerceIn(0f, 1f)
+                } else {
+                    0f
+                }
+                return edited.copy(temperatureK = t, crustHeat = nextCrustHeat) to null
+            }
+
+            return edited to null
         }
     }
 }

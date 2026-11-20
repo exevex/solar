@@ -19,47 +19,47 @@
   - Hypervelocity catastrophic fragmentation spawning glowing molten debris chunks and particle bursts.
 
 ### Real observation assets & physics provenance
-- **Observation-based 3D bodies:** Named bodies use NASA/JPL equirectangular maps packed in `app/src/main/res/drawable-nodpi`, wrapped on UV spheres with real physical radii. The shader is procedural only for custom bodies without a measured map; provenance and SHA-256 checksums are in [REAL_DATA_SOURCES.md](REAL_DATA_SOURCES.md).
+- **Mapped Solar-System bodies:** The app applies packaged NASA/JPL, mission, and Solar System Scope surface maps to named UV spheres. These improve surface identity but are not measured triangle meshes or uniformly precise elevation models; see the asset-specific notes and checksums in [REAL_DATA_SOURCES.md](REAL_DATA_SOURCES.md).
 - **JPL initial conditions:** The Solar System preset loads DE441/JPL Horizons J2000 state vectors for the Sun, planets and tracked moons, then evolves them with the selected N-body integrator.
 - **Physical collision model:** Gravity softening, contact radii, impact energy and Roche limits use physical radii rather than sandbox display radii. Swept contacts prevent fast objects tunneling through a body between simulation samples.
 - **Event text toggle:** Physics events continue to happen when the HUD event-text switch is off; only the explanatory toast is hidden.
+- **Science Copilot:** Optional Gemini 2.5 Flash explainer with up to eight prior turns and a read-only snapshot of the selected body's live simulation values. Paste a key per session; the app does not persist it or bundle it into the APK. Sending a question shares it, the displayed simulation context, and recent turns with Google. Requires internet access and a Gemini API key.
 
 ### Visuals & OpenGL ES 3.0 Shaders
 - **Floating Origin + Logarithmic Depth:** World coordinates are subtracted in 64-bit `Double` precision relative to the camera focus target before uploading `Float` matrices, paired with logarithmic depth encoding to eliminate jitter and z-fighting from planetary surfaces out to 100+ AU.
-- **Procedural 3D Spherical PBR Planets:** Zero-seam 3D FBM terrain, normal relief perturbation, ocean specular glint, polar ice caps, Earth night-side city lights, animated swirling cloud layers, Jupiter/Saturn zonal jet bands & Great Red Spot, and Mars/Mercury craters.
+- **Mapped Worlds & Physical Body Radii:** Mission and NASA/JPL surface imagery is mapped onto UV-sphere geometry for named bodies; procedural relief and atmosphere effects add depth, but the app does not include measured triangle terrain meshes. Named-world visual maps plus attribution/limitations are documented in [REAL_DATA_SOURCES.md](REAL_DATA_SOURCES.md). Earth, Mars, Mercury/Moon and giant-planet shaders retain climate, cloud, crater and atmospheric effects.
+- **Habitable Zone Overlay:** Toggleable **Habitable Zone** Goldilocks view rendering dynamic liquid-water circumstellar rings (`0.85√L`–`1.78√L` AU) around every luminous star as you edit stellar mass or luminosity.
 - **Atmosphere, Shadows & Eclipses:** Rayleigh/Mie rim scattering with orange-red sunset terminators, analytical ray-sphere eclipse shadows across planets/moons, and mutual Saturn ring/planet shadows.
-- **HDR Stars & Post-Processing:** Planckian blackbody star colors (O, B, A, F, G, K, M), animated solar granulation & sunspots, limb darkening, additive plasma corona & pulsar beams, multi-pass separable Gaussian **Bloom**, and ACES Filmic tone mapping.
-- **Skybox & Trails:** Procedural Milky Way galactic band + multi-spectral starfield, toggleable orbit trails, floating body labels, and **Cinematic Camera Mode**.
+- **HDR Stars & Post-Processing:** Planckian blackbody star colors (O, B, A, F, G, K, M), dual-scale animated solar granulation & chromosphere limb glow, limb darkening, additive plasma corona & pulsar beams, multi-pass separable Gaussian **Bloom**, and ACES Filmic tone mapping.
+- **Skybox & Trails:** Procedural Milky Way galactic band + multi-spectral starfield, toggleable orbit trails, floating body labels with live status tags (`SPAGHETTIFYING`, `ACCRETING`, `MOLTEN`, `RED GIANT`), live Cosmic Activity Ticker, and **Cinematic Camera Mode**.
 
 ### Black Holes & Relativistic Effects
-- **Black Holes of Any Mass:** Spawn Stellar (12 $M_\odot$), Intermediate (80 $M_\odot$), or Supermassive (300+ $M_\odot$) black holes, or edit mass live.
-- **Gravitational Lensing Shader:** Screen-space Einstein-ring deflection warping background stars and planets around every visible black hole.
-- **Event Horizon, Photon Ring & Doppler Accretion Disk:** Pitch-black horizon core, HDR photon sphere, and swirling Keplerian accretion disk with **relativistic Doppler beaming** (blue-bright approaching limb, dim redshifted receding limb).
-- **Tidal Disruption Events (TDE):** Bodies entering the tidal limit are shredded into spiraling plasma streams, trigger relativistic polar jets, and grow the black hole's mass and Schwarzschild radius.
+- **Black Holes of Any Mass:** Easily spawn Primordial (3 $M_\odot$), Stellar (12 $M_\odot$), Intermediate (80 $M_\odot$), or Supermassive (350 $M_\odot$) black holes from the `Black Holes` spawn category, or scale mass to infinity in the Inspector.
+- **3D Schwarzschild Geodesic Raymarched Black Holes:** Null-geodesic raymarching on GPU bends light rays smoothly around the pitch-black event horizon shadow, rendering a sharp photon ring, gravitationally lensed upper/lower accretion arches, and relativistic Doppler beaming. Newly spawned isolated black holes start disk-free and **progressively build a swirling accretion disk & polar jets** as they absorb stars, planets, and matter.
+- **Smooth Tidal Spaghettification & Disruption (TDE):** Bodies entering the Roche zone elongate into a smooth $C^1$ teardrop toward the black hole, heat up with tidal shear glow, shed L1-anchored **orbiting spiral plasma filaments** (`TidalStreamFilament`) into the black hole, and transfer mass (`Absorbed Mass` tracked live). Tiny rocky specks hitting stars or gas giants vaporize cleanly without spurious debris/craters.
 - **Hawking Evaporation & Mergers:** Optional Hawking radiation mass loss culminating in an evaporation flash, plus binary black hole inspirals and gravitational-wave merger ripples.
 
-### Sandbox Tools, Weapons & Presets
-- **Live Object Inspector & Editor:** Live telemetry (surface gravity $g$, escape velocity km/s, temperature K/°C, density g/cm³, orbital period, semi-major axis, eccentricity, Schwarzschild radius) plus live sliders for Radius, Mass, Density, Luminosity, Temperature, Spin, Axial Tilt, Atmosphere, Orbit Speed ±15%, and Surface Tint.
-- **Spawn Catalog:** Planets, Moons, Stars (O/B/A/F/G/K/M + Red Giant), White Dwarfs, Neutron Stars (Pulsars), Comets, Asteroids, and Black Holes.
+### Sandbox Tools, Weapons & Live Coupling
+- **Live Property Coupling & Earth Surface Map:** Editing any property triggers coupled astrophysics: Star Mass ↔ Luminosity ($M^{3.5}$), Radius ($M^{0.8}$), Temperature, and Spectral Class (`O..M`); White Dwarf (`>1.44 M☉`) → Neutron Star (`>2.8 M☉`) → Black Hole; Planet Mass (`>15 M⊕`) → Gas Giant (`>0.08 M☉`) → Red Dwarf Star; Atmosphere → greenhouse warming. Includes a **Live Earth 2D Surface Map Preview** in both the Inspector and a toggleable HUD window showing real-time oceans, ice sheets, magma, craters, and habitability %.
+- **Wide Multi-Item Spawn Tray & Precise Placement:** Full-width horizontal bottom catalog with `Circular Orbit` / `Drop Still` velocity toggle, cyan **target placement reticle**, horizon-safe tap-to-place anywhere in space, and `Quick Place`.
 - **Weapons & Cosmic Events:** Asteroid Strike, Thermonuclear Strike, Planet Splitter, Trigger Supernova, Gamma-Ray Burst, and Rogue Star Flyby.
 - **7 System Presets:** Solar System, Alpha Centauri, Binary Star System, TRAPPIST-1, Galaxy Collision, Sun → Red Giant Evolution, and Binary Black Holes.
 - **Stellar Evolution:** Main Sequence → Red Giant expansion → Supernova (Neutron Star / Black Hole) or Planetary Nebula → White Dwarf.
 
 ### Mobile UX & Optimization
 - **Touch Controls:**
-  - **1-finger drag:** Orbit camera around selected focus body
-  - **2-finger pinch:** Logarithmic zoom from planetary crust out to 180 AU
-  - **Tap:** 3D ray-sphere body selection (or tap-to-place in Spawn mode)
-  - **Long-press + drag:** Grab and fling existing bodies
+  - **Orbit tool (default):** 1-finger drag orbits camera, 2-finger pinch zooms logarithmically, tap selects, long-press + drag grabs/flings any body
+  - **Drag tool:** Dedicated left-rail **Drag** mode so 1-finger touch immediately grabs and flings planets, stars, or black holes without waiting for a long-press
   - **Slingshot mode:** Touch and drag back to aim launch velocity with a real-time **predicted trajectory arc**
-- **Performance:** Dedicated background physics thread, 3-tier sphere mesh LODs, GPU-instanced (`glDrawElementsInstanced`) asteroid belt & star clusters, Quality Settings (`Low`, `Medium`, `High`, `Ultra`), **Auto-Detect Device**, and **Battery Saver (30 FPS)** mode.
+- **Performance:** Dedicated background physics thread, upgraded high-detail sphere mesh LODs (`46×68` / `24×34`), GPU-instanced (`glDrawElementsInstanced`) asteroid belt & star clusters, Quality Settings (`Low`, `Medium`, `High`, `Ultra`), **Auto-Detect Device**, and **Battery Saver (30 FPS)** mode.
 
 ---
 
 ## Known Limits
-- **True Scale vs. Sandbox Clear View:** At exact 1:1 km/AU scale, terrestrial planets are sub-pixel dots at solar-system zoom levels. The default *Sandbox Clear View* applies type-based visual scaling while retaining exact NASA/JPL values for all physics telemetry; you can toggle *True Astronomical Scale* in Settings.
+- **True Scale vs. Sandbox Clear View:** At exact 1:1 km/AU scale, terrestrial planets are tiny dots at solar-system zoom levels. The default *Sandbox Clear View* applies enlarged planetary/solar visual scaling while keeping orbital physics at true AU radii; toggle *True Astronomical Scale* in Settings.
 - **N-Body Particle Scaling:** Asteroid-to-asteroid mutual $N^2$ forces are skipped for background belt clusters to maintain 60 FPS on mid-range mobile CPUs (they still experience full gravity from the Sun and all major planets/black holes).
-- **Gravitational Lensing:** Uses a fast screen-space Einstein-ring shader pass rather than multi-bounce 3D Kerr geodesic raytracing to stay within mid-range mobile GPU thermal budgets.
+- **Relativistic optics approximation:** The renderer integrates a fixed 44-step Schwarzschild null-geodesic approximation inside a black-hole bounding volume; it is not full Kerr ray tracing. Clear View intentionally enlarges the visible horizon; True Scale uses the physical Schwarzschild radius.
+- **AI and scientific limits:** The copilot is a language-model explainer, not a numerical solver or live JPL lookup. Its request sends the question, displayed simulation context, and up to eight prior turns to Google's Gemini API; confirm important facts independently.
 
 ## Build an APK
 

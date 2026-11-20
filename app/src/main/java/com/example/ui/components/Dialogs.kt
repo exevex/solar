@@ -110,7 +110,7 @@ fun QualitySettingsDialog(
     onBloomChange: (Float) -> Unit,
     onIntegratorChange: (IntegratorMode) -> Unit,
     onToggleTrueScale: () -> Unit,
-    onToggleEventText: () -> Unit,
+    onToggleHabitableZone: () -> Unit,
     onDismiss: () -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
@@ -165,7 +165,7 @@ fun QualitySettingsDialog(
                 }
 
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text("True Astronomical Scale", style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
                         Text("Off = Sandbox Clear View • On = Exact 1:1 km/AU radii", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
                     }
@@ -173,9 +173,21 @@ fun QualitySettingsDialog(
                 }
 
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Column {
-                        Text("Event Text", style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
-                        Text("Show or hide impact and evolution toasts", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Habitable Zone Overlay", style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
+                        Text("Show liquid-water Goldilocks ring around stars", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                    }
+                    Switch(
+                        checked = uiState.config.showHabitableZone,
+                        onCheckedChange = { onToggleHabitableZone() },
+                        modifier = Modifier.testTag("dialog_habitable_zone_switch")
+                    )
+                }
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Simulation Event Text", style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
+                        Text("Hide event banners without disabling the events", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
                     }
                     Switch(checked = uiState.config.showEventText, onCheckedChange = { onToggleEventText() }, modifier = Modifier.testTag("toggle_event_text"))
                 }

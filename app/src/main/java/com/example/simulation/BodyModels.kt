@@ -17,6 +17,31 @@ enum class BodyType(val label: String, val isLuminous: Boolean, val isCompact: B
     DEBRIS("Molten Debris", false, false)
 }
 
+/**
+ * NASA / JPL visual surface archetypes for accurate procedural PBR shading.
+ */
+enum class BodyArchetype(val shaderId: Int) {
+    GENERIC_EARTH(0),
+    GENERIC_ROCK(1),
+    GENERIC_GAS(2),
+    GENERIC_ICE(3),
+    COMET(4),
+    EARTH(5),
+    MARS(6),
+    MERCURY(7),
+    VENUS(8),
+    LUNA(9),
+    JUPITER(10),
+    SATURN(11),
+    URANUS(12),
+    NEPTUNE(13),
+    PLUTO(14),
+    IO(15),
+    EUROPA(16),
+    TITAN(17),
+    ENCELADUS(18)
+}
+
 enum class SpectralClass(val label: String, val tempK: Double, val massSolar: Double, val radiusKm: Double, val luminositySolar: Double) {
     O("O-Type Blue Super", 35000.0, 28.0, 5_500_000.0, 80000.0),
     B("B-Type Blue-White", 18000.0, 6.5, 2_400_000.0, 1200.0),
@@ -62,10 +87,41 @@ data class RingSystem(
     val hasCassiniGap: Boolean = true
 )
 
+data class AccretionParcel(
+    val relPos: Vec3d,
+    val relVel: Vec3d,
+    val massSolar: Double,
+    val temperatureK: Double,
+    val ageSec: Float = 0f
+)
+
+enum class CinematicPerspective(val label: String) {
+    AUTO("Auto Director"),
+    WIDE_APPROACH("Wide Approach"),
+    CLOSE_IMPACT("Impact Close-Up"),
+    EJECTA_PLUME("Ejecta Plume"),
+    FRAGMENT_TRACK("Track Remnant")
+}
+
+enum class CinematicPhase(val label: String) {
+    WIDE_APPROACH("Approach Trajectory"),
+    CLOSE_IMPACT("Contact & Compression"),
+    EJECTA_PLUME("Ejecta Plume Expansion"),
+    FRAGMENT_TRACK("Remnant & Debris Evolution"),
+    DEBRIS_WIDE("Debris Field Overview")
+}
+
 data class CelestialBody(
     val id: Long,
     val name: String,
     val type: BodyType,
+    val archetype: BodyArchetype = when (type) {
+        BodyType.EARTH_LIKE -> BodyArchetype.GENERIC_EARTH
+        BodyType.GAS_GIANT -> BodyArchetype.GENERIC_GAS
+        BodyType.ICE_GIANT -> BodyArchetype.GENERIC_ICE
+        BodyType.COMET -> BodyArchetype.COMET
+        else -> BodyArchetype.GENERIC_ROCK
+    },
     val spectralClass: SpectralClass = SpectralClass.NONE,
     val pos: Vec3d,
     val vel: Vec3d,
@@ -85,68 +141,75 @@ data class CelestialBody(
     val ringSystem: RingSystem? = null,
     val craters: List<CraterMark> = emptyList(),
     val crustHeat: Float = 0f,
+    val impactDeformDir: Vec3d = Vec3d(1.0, 0.0, 0.0),
+    val impactDeformAmount: Float = 0f,
+    val impactShockDir: Vec3d = Vec3d(0.0, 1.0, 0.0),
+    val impactShockAge: Float = 999f,
     val ageGyr: Double = 4.6,
     val initialMassSolar: Double = massSolar,
     val evolutionStage: EvolutionStage = EvolutionStage.NONE,
     val trail: List<Vec3d> = emptyList(),
     val parentBodyId: Long? = null,
     val accretionActivity: Float = 0f,
+    val absorbedMassSolar: Double = 0.0,
+    val diskProfile: List<Float> = listOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f),
+    val diskPlaneNormal: Vec3d = Vec3d(0.24, 0.97, 0.0).normalized(),
+    val accretionParcels: List<AccretionParcel> = emptyList(),
     val tidalStress: Float = 0f,
+    val tidalStretchDir: Vec3d = Vec3d(1.0, 0.0, 0.0),
+    val tidalStretchAmount: Float = 0f,
+    val tidalTargetBhId: Long? = null,
     val isBackgroundCluster: Boolean = false
 ) {
-    /** Actual physical radius in AU */
     val physicsRadiusAu: Double
         get() = (radiusKm / AstroConstants.AU_KM).coerceAtLeast(1e-7)
 
-    /**
-     * Visual radius in AU for sandbox playability.
-     * In Enhanced Sandbox mode, planets & moons are scaled so they remain visible alongside orbits,
-     * while True Scale mode uses exact physical radii.
-     */
     fun getVisualRadiusAu(trueScale: Boolean): Double {
         if (trueScale) return physicsRadiusAu
         return when (type) {
-            BodyType.STAR, BodyType.RED_GIANT ->
-                (physicsRadiusAu * 18.0).coerceIn(0.015, 0.45)
+            BodyType.STAR ->
+                (physicsRadiusAu * 28.0).coerceIn(0.035, 0.34)
+            BodyType.RED_GIANT ->
+                (physicsRadiusAu * 18.0).coerceIn(0.16, 0.65)
             BodyType.WHITE_DWARF, BodyType.NEUTRON_STAR ->
-                (physicsRadiusAu * 120.0).coerceIn(0.008, 0.028)
+                (physicsRadiusAu * 200.0).coerceIn(0.015, 0.045)
             BodyType.BLACK_HOLE -> {
-                // Visual Schwarzschild + accretion horizon radius
                 val rsAu = AstroConstants.SCHWARZSCHILD_SUN_AU * massSolar
-                (rsAu * 3500.0).coerceIn(0.012, 0.16)
+                (rsAu * 4400.0).coerceIn(0.025, 0.28)
             }
-            BodyType.GAS_GIANT ->
-                (physicsRadiusAu * 155.0).coerceIn(0.022, 0.095)
-            BodyType.ICE_GIANT ->
-                (physicsRadiusAu * 210.0).coerceIn(0.016, 0.065)
-            BodyType.EARTH_LIKE, BodyType.TERRESTRIAL_PLANET ->
-                (physicsRadiusAu * 380.0).coerceIn(0.009, 0.036)
-            BodyType.DWARF_PLANET ->
-                (physicsRadiusAu * 650.0).coerceIn(0.006, 0.018)
-            BodyType.MOON ->
-                (physicsRadiusAu * 480.0).coerceIn(0.0035, 0.014)
+            // Monotonic power-law planetary scaling so Jupiter (~0.129 AU), Saturn (~0.113), Uranus/Neptune (~0.060),
+            // Earth/Venus (~0.022), Mars (~0.0134), Mercury (~0.0103), Moon (~0.0079), Pluto (~0.0061)
+            // maintain authentic relative astronomical proportions while remaining clearly visible in Sandbox Clear View.
+            BodyType.GAS_GIANT,
+            BodyType.ICE_GIANT,
+            BodyType.EARTH_LIKE,
+            BodyType.TERRESTRIAL_PLANET,
+            BodyType.DWARF_PLANET,
+            BodyType.MOON -> {
+                val relEarth = (radiusKm / 6371.0).coerceAtLeast(0.01)
+                (Math.pow(relEarth, 0.74) * 0.022).coerceIn(0.0045, 0.165)
+            }
             BodyType.ASTEROID, BodyType.COMET ->
-                (physicsRadiusAu * 1200.0).coerceIn(0.0025, 0.009)
-            BodyType.DEBRIS ->
-                (physicsRadiusAu * 900.0).coerceIn(0.002, 0.008)
+                (physicsRadiusAu * 1400.0).coerceIn(0.0038, 0.010)
+            BodyType.DEBRIS -> {
+                val relEarth = (radiusKm / 6371.0).coerceAtLeast(0.01)
+                (Math.pow(relEarth, 0.74) * 0.022).coerceIn(0.0032, 0.045)
+            }
         }
     }
 
-    /** Surface gravity in m/s^2 */
     fun surfaceGravityMs2(): Double {
         val mKg = massSolar * AstroConstants.SOLAR_MASS_KG
         val rM = (radiusKm * 1000.0).coerceAtLeast(1.0)
         return AstroConstants.G_SI * mKg / (rM * rM)
     }
 
-    /** Escape velocity in km/s */
     fun escapeVelocityKmS(): Double {
         val mKg = massSolar * AstroConstants.SOLAR_MASS_KG
         val rM = (radiusKm * 1000.0).coerceAtLeast(1.0)
         return kotlin.math.sqrt(2.0 * AstroConstants.G_SI * mKg / rM) / 1000.0
     }
 
-    /** Bulk density in g/cm^3 */
     fun densityGCm3(): Double {
         val mGrams = massSolar * AstroConstants.SOLAR_MASS_KG * 1000.0
         val rCm = (radiusKm * 100_000.0).coerceAtLeast(1.0)
@@ -154,13 +217,18 @@ data class CelestialBody(
         return mGrams / vol
     }
 
-    /** Schwarzschild radius in km */
-    fun schwarzschildRadiusKm(): Double {
-        return 2.95325 * massSolar
-    }
+    fun schwarzschildRadiusKm(): Double = 2.95325 * massSolar
 }
 
-/** Transient particle / shockwave events rendered by the OpenGL GPU particle & ring pass */
+/**
+ * Live curved plasma filament pulled from a tidally-stretched star/planet spiraling into a Black Hole's accretion disk.
+ */
+data class TidalStreamFilament(
+    val points: List<Vec3d>,
+    val color: Triple<Float, Float, Float>,
+    val intensity: Float
+)
+
 data class ShockwaveEvent(
     val id: Long,
     val pos: Vec3d,
@@ -184,7 +252,8 @@ data class DebrisParticle(
     var r: Float,
     var g: Float,
     var b: Float,
-    var targetBlackHoleId: Long = -1L
+    var targetBlackHoleId: Long = -1L,
+    var affectedByGravity: Boolean = true
 )
 
 data class GammaBurstBeam(
@@ -206,12 +275,13 @@ data class BodyTelemetry(
     val semiMajorAxisAu: Double?,
     val eccentricity: Double?,
     val rocheLimitAu: Double?,
-    val schwarzschildKm: Double
+    val schwarzschildKm: Double,
+    val statusSummary: String
 )
 
 data class SimulationConfig(
     val isPaused: Boolean = false,
-    val timeScaleYearsPerSec: Double = 0.04, // ~14.6 days/sec default
+    val timeScaleYearsPerSec: Double = 0.04,
     val isRewinding: Boolean = false,
     val integrator: IntegratorMode = IntegratorMode.VELOCITY_VERLET,
     val hawkingEvaporation: Boolean = false,
@@ -220,7 +290,7 @@ data class SimulationConfig(
     val trueScaleMode: Boolean = false,
     val showOrbits: Boolean = true,
     val showLabels: Boolean = true,
-    /** Keep event simulation active while suppressing the HUD toast text. */
+    val showHabitableZone: Boolean = false,
     val showEventText: Boolean = true
 )
 

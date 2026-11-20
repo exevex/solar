@@ -1,6 +1,6 @@
 # Observation-based body assets
 
-The renderer uses packed equirectangular maps for named Solar-System bodies instead of painting replacement planet surfaces in code. They are applied to a high-resolution UV sphere with the body's physical radius and current orientation; procedural shading is retained only as a fallback for user-created objects with no observation-based map.
+The renderer maps packaged equirectangular surface imagery onto UV-sphere geometry for named Solar-System bodies. These are surface maps, not mission-derived triangle meshes or fully measured elevation models. In True Astronomical Scale mode the sphere uses the body's physical radius; Sandbox Clear View intentionally enlarges displayed radii. Unmapped/user-created bodies use procedural shading. For mobile GPU memory, source images are decoded at up to 1024 pixels on the longest edge; the packaged source files listed below remain unchanged.
 
 ## Sources
 
