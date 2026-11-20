@@ -157,9 +157,14 @@ object BlackHoleShaders {
                 vec3 nextPos = pos + (vel + nextVel) * (0.5 * dt);
 
                 float currPlane = dot(nextPos, uDiskNormal);
-                if (diskVisible > 0.005 && ((prevPlane > 0.0 && currPlane <= 0.0) ||
-                                            (prevPlane < 0.0 && currPlane >= 0.0))) {
-                    float frac = abs(prevPlane) / max(abs(prevPlane) + abs(currPlane), 1e-6);
+                bool crossedPlane = (prevPlane > 0.0 && currPlane <= 0.0) ||
+                                    (prevPlane < 0.0 && currPlane >= 0.0);
+                // A strictly zero-thickness crossing test makes an edge-on disk
+                // disappear. Resolve its finite photosphere as a narrow slab.
+                float diskHalfThickness = mix(0.035, 0.09, cinematic);
+                bool insidePhotosphere = min(abs(prevPlane), abs(currPlane)) < diskHalfThickness;
+                if (diskVisible > 0.005 && (crossedPlane || insidePhotosphere)) {
+                    float frac = crossedPlane ? abs(prevPlane) / max(abs(prevPlane) + abs(currPlane), 1e-6) : 0.5;
                     vec3 hit = mix(pos, nextPos, frac);
                     float rDisk = length(hit);
                     if (rDisk > diskInner && rDisk < diskOuter) {
@@ -181,7 +186,9 @@ object BlackHoleShaders {
                             float doppler = dot(orbTan, -vel);
                             float gravRedshift = sqrt(clamp(1.0 - 1.0 / max(rDisk, 1.001), 0.0, 1.0));
                             float gRel = clamp(1.0 + 0.46 * doppler, 0.42, 1.68) * gravRedshift;
-                            float beam = pow(gRel, 2.5);
+                            // Cinema keeps both disk limbs readable; physical mode
+                            // retains the stronger approximate Doppler contrast.
+                            float beam = mix(pow(gRel, 2.5), 1.0 + 0.15 * doppler, cinematic);
                             float fade = smoothstep(0.0, 0.055, u) * (1.0 - smoothstep(0.80, 1.0, u));
                             float innerHeat = exp(-pow((u - 0.10) / 0.075, 2.0));
                             vec3 warm = mix(vec3(0.72, 0.12, 0.035), vec3(1.0, 0.50, 0.14),
@@ -193,6 +200,7 @@ object BlackHoleShaders {
                             float dAlpha = fade * (0.45 + 0.55 * clumps)
                                          * mix(clamp(0.35 + binWeight * 0.55, 0.0, 0.90), 0.78, cinematic)
                                          * diskVisible * localDensity;
+                            if (!crossedPlane) dAlpha *= clamp(dt / (2.0 * diskHalfThickness) * 0.35, 0.0, 1.0);
                             vec3 dCol = diskColor * (rings * (0.58 + 0.88 * clumps) + innerHeat * 1.2)
                                       * beam * energy;
                             accumGlow += dCol * dAlpha * (1.0 - accumAlpha);
@@ -213,8 +221,9 @@ object BlackHoleShaders {
             vec3 ringColor = mix(vec3(0.72, 0.84, 1.0), vec3(1.0, 0.74, 0.39), cinematic);
 
             if (captured) {
-                // Keep the shadow black; only the thin critical-image ring can remain luminous.
-                fragColor = vec4(ringColor * ringLevel, 1.0);
+                // The horizon absorbs background light, not disk light already
+                // emitted in front of it along this ray.
+                fragColor = vec4(accumGlow + ringColor * ringLevel * (1.0 - accumAlpha), 1.0);
             } else {
                 vec3 lensedBg = evalSky(normalize(vel));
                 float deflection = acos(clamp(dot(normalize(vel), rd), -1.0, 1.0));

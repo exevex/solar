@@ -325,7 +325,9 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
         glRenderer?.selectedBodyId = id
         glRenderer?.manualPanOffset = Vec3d.ZERO
         val rVis = b.getVisualRadiusAu(engine.config.trueScaleMode)
-        glRenderer?.distanceAu = (rVis * 5.2).coerceIn(0.03, 40.0)
+        val cinematicBlackHole = b.type == BodyType.BLACK_HOLE && engine.config.cinematicBlackHoles
+        glRenderer?.distanceAu = (rVis * if (cinematicBlackHole) 11.25 else 5.2).coerceIn(0.03, 40.0)
+        if (cinematicBlackHole) glRenderer?.pitchDeg = 4f
         selectBody(id)
     }
 

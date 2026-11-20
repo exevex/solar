@@ -130,7 +130,7 @@ def sphere_mesh(lat_steps=64, lon_steps=96):
     return vertices, indices
 
 
-def render(look):
+def render(look, edge_on=False):
     vs, fs = shader_sources()
     gl = rv.GL(512, 512)
     try:
@@ -142,7 +142,7 @@ def render(look):
         radius = R_BOUND
         model = list(rv.IDENTITY)
         model[0] = model[5] = model[10] = radius
-        eye = [0.0, 0.0, 40.0]
+        eye = [0.0, 0.0 if edge_on else 2.5, 40.0]
         vp = rv.matmul(rv.perspective(aspect=1.0, near=0.1, far=120.0), rv.view(eye))
         values = {
             "uModel": model, "uViewProj": vp, "uLogDepthCoef": 0.0,
@@ -164,7 +164,8 @@ def render(look):
             error = gl.glGetError()
             assert error == 0, f"uniform {name} left GLES error {hex(error)}"
         pixels = gl.draw(cull=0x0404)  # Cull the near exterior faces; shade the ray-volume exit.
-        rv.png(rv.OUT / ("black-hole-cinematic.png" if look else "black-hole-physical-dry.png"), gl.w, gl.h, pixels)
+        image_name = "black-hole-edge-on.png" if edge_on else ("black-hole-cinematic.png" if look else "black-hole-physical-dry.png")
+        rv.png(rv.OUT / image_name, gl.w, gl.h, pixels)
         rgb = [pixels[i:i + 3] for i in range(0, len(pixels), 4)]
         lit = [p for p in rgb if max(p) >= 72]
         center = rgb[(gl.h // 2) * gl.w + gl.w // 2]
@@ -179,10 +180,15 @@ def render(look):
                     upper_arch += count
                 else:
                     lower_arch += count
-        return {"look": "cinematic" if look else "physical-dry", "lit_pixels": len(lit),
+        wings = {}
+        for side, xa, xb in [("left", cx - 95, cx - 42), ("right", cx + 42, cx + 95)]:
+            wings[side] = sum(1 for y in range(cy - 10, cy + 15) for x in range(xa, xb)
+                              if max(rgb[y * gl.w + x]) >= 55)
+        return {"look": "cinematic-edge-on" if edge_on else ("cinematic" if look else "physical-dry"), "lit_pixels": len(lit),
+                "horizontal_disk_wing_pixels": wings,
                 "upper_arch_pixels": upper_arch, "lower_arch_pixels": lower_arch,
                 "peak_rgb": list(max(rgb, key=lambda p: max(p))), "shadow_center_rgb": list(center),
-                "image": str(rv.OUT / ("black-hole-cinematic.png" if look else "black-hole-physical-dry.png"))}
+                "image": str(rv.OUT / image_name)}
     finally:
         gl.close()
 
@@ -191,11 +197,14 @@ def main():
     coverage = check_coverage()
     cinematic = render(1)
     physical = render(0)
+    edge = render(1, edge_on=True)
     assert cinematic["lit_pixels"] > physical["lit_pixels"] + 20, (cinematic, physical)
     assert cinematic["upper_arch_pixels"] >= 400, cinematic
     assert cinematic["lower_arch_pixels"] >= 400, cinematic
     assert max(cinematic["shadow_center_rgb"]) <= 35, cinematic
-    report = {"coverage": coverage, "rendered": [cinematic, physical],
+    for image in [cinematic, edge]:
+        assert min(image["horizontal_disk_wing_pixels"].values()) >= 50, image
+    report = {"coverage": coverage, "rendered": [cinematic, physical, edge],
               "shader": "GLES3 extracted from BlackHoleShaders.kt; actual pbuffer draw/readback"}
     out = rv.OUT / "black-hole-verification.json"
     out.write_text(__import__("json").dumps(report, indent=2) + "\n")

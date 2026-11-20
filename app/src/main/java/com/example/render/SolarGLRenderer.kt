@@ -682,7 +682,8 @@ class SolarGLRenderer(
                 val b6 = bins.getOrElse(6) { 0f }; val b7 = bins.getOrElse(7) { 0f }
                 val diskStrength = bh.accretionActivity.coerceIn(0f, 2.5f)
 
-                val normD = if (bh.diskPlaneNormal.lengthSq() > 1e-6) bh.diskPlaneNormal.normalized() else Vec3d(0.0, 1.0, 0.0)
+                val normD = if (blackHoleLook == BlackHoleLook.INTERSTELLAR_CINEMATIC) Vec3d(0.0, 1.0, 0.0)
+                    else if (bh.diskPlaneNormal.lengthSq() > 1e-6) bh.diskPlaneNormal.normalized() else Vec3d(0.0, 1.0, 0.0)
                 val ref = if (abs(normD.y) < 0.92) Vec3d(0.0, 1.0, 0.0) else Vec3d(1.0, 0.0, 0.0)
                 val rightD = ref.cross(normD).normalized()
                 val fwdD = normD.cross(rightD).normalized()
