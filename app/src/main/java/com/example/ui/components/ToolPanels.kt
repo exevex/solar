@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -23,11 +24,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.simulation.*
 import com.example.ui.theme.*
 import com.example.viewmodel.*
+import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.pow
 
@@ -314,6 +317,12 @@ fun InspectorPanel(
             return@GlassHudSurface
         }
         val b = telemetry.body
+        var posX by remember(b.id) { mutableStateOf(String.format(java.util.Locale.US, "%.6f", b.pos.x)) }
+        var posY by remember(b.id) { mutableStateOf(String.format(java.util.Locale.US, "%.6f", b.pos.y)) }
+        var posZ by remember(b.id) { mutableStateOf(String.format(java.util.Locale.US, "%.6f", b.pos.z)) }
+        var velX by remember(b.id) { mutableStateOf(String.format(java.util.Locale.US, "%.6f", b.vel.x)) }
+        var velY by remember(b.id) { mutableStateOf(String.format(java.util.Locale.US, "%.6f", b.vel.y)) }
+        var velZ by remember(b.id) { mutableStateOf(String.format(java.util.Locale.US, "%.6f", b.vel.z)) }
         Column(
             modifier = Modifier.padding(12.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -360,6 +369,35 @@ fun InspectorPanel(
                 }
             }
 
+            Text("Initial State Editor", style = MaterialTheme.typography.titleSmall, color = CyanTelemetry)
+            Text("Pause before changing position (AU) or velocity (AU/year).", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                StateCoordinateField(posX, "X AU", "state_pos_x", Modifier.weight(1f)) { posX = it }
+                StateCoordinateField(posY, "Y AU", "state_pos_y", Modifier.weight(1f)) { posY = it }
+                StateCoordinateField(posZ, "Z AU", "state_pos_z", Modifier.weight(1f)) { posZ = it }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                StateCoordinateField(velX, "VX AU/y", "state_vel_x", Modifier.weight(1f)) { velX = it }
+                StateCoordinateField(velY, "VY AU/y", "state_vel_y", Modifier.weight(1f)) { velY = it }
+                StateCoordinateField(velZ, "VZ AU/y", "state_vel_z", Modifier.weight(1f)) { velZ = it }
+            }
+            val stateNumbers = listOf(posX, posY, posZ, velX, velY, velZ).map { it.toDoubleOrNull() }
+            val validState = stateNumbers.all { it != null && it.isFinite() }
+            Button(
+                onClick = {
+                    if (validState) {
+                        onEditBody { it.copy(
+                            pos = Vec3d(posX.toDouble(), posY.toDouble(), posZ.toDouble()),
+                            vel = Vec3d(velX.toDouble(), velY.toDouble(), velZ.toDouble())
+                        ) }
+                    }
+                },
+                enabled = validState,
+                modifier = Modifier.fillMaxWidth().testTag("apply_body_state")
+            ) {
+                Text("Apply Position & Velocity")
+            }
+
             Text("Live Property Editor", style = MaterialTheme.typography.titleSmall, color = CyanTelemetry)
 
             // Radius Slider (log)
@@ -371,8 +409,8 @@ fun InspectorPanel(
             }
 
             // Mass Slider (log)
-            val minM = ln(1e-9); val maxM = ln(500.0)
-            val mFrac = ((ln(b.massSolar.coerceIn(1e-9, 500.0)) - minM) / (maxM - minM)).toFloat()
+            val minM = ln(1e-12); val maxM = ln(500.0)
+            val mFrac = ((ln(b.massSolar.coerceIn(1e-12, 500.0)) - minM) / (maxM - minM)).toFloat()
             LabeledSlider("Mass: ${formatMass(b.massSolar)}", mFrac) { f ->
                 val newM = kotlin.math.exp(minM + f * (maxM - minM))
                 onEditBody { it.copy(massSolar = newM) }
@@ -410,13 +448,59 @@ fun InspectorPanel(
             LabeledSlider("Atmosphere: ${(b.atmosphereDensity * 100).toInt()}%", b.atmosphereDensity) { f ->
                 onEditBody { it.copy(atmosphereDensity = f) }
             }
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Cloud Layer", style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
+                    Text("Drive cloud rendering from the editable body state", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                }
+                Switch(checked = b.hasClouds, onCheckedChange = { enabled -> onEditBody { it.copy(hasClouds = enabled) } }, modifier = Modifier.testTag("toggle_clouds"))
+            }
+            if (b.type == BodyType.EARTH_LIKE) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Night-side City Lights", style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
+                        Text("Visible only on the dark hemisphere", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                    }
+                    Switch(checked = b.hasCityLights, onCheckedChange = { enabled -> onEditBody { it.copy(hasCityLights = enabled) } }, modifier = Modifier.testTag("toggle_city_lights"))
+                }
+            }
+
             LabeledSlider("Axial Tilt: ${b.axialTiltDeg.toInt()}°", (b.axialTiltDeg.toFloat() / 180f).coerceIn(0f, 1f)) { f ->
                 onEditBody { it.copy(axialTiltDeg = (f * 180.0)) }
             }
             val spinRateFrac = (1f - (kotlin.math.abs(b.rotationPeriodHours).toFloat() / 240f).coerceIn(0f, 1f))
             LabeledSlider("Spin Speed", spinRateFrac) { f ->
                 val hours = (240.0 * (1.0 - f)).coerceAtLeast(1.5)
-                onEditBody { it.copy(rotationPeriodHours = hours) }
+                onEditBody { it.copy(rotationPeriodHours = if (it.rotationPeriodHours < 0.0) -hours else hours) }
+            }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Retrograde Rotation", style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
+                    Text("Reverse the object's spin direction", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                }
+                Switch(
+                    checked = b.rotationPeriodHours < 0.0,
+                    onCheckedChange = { reverse -> onEditBody { body ->
+                        val period = abs(body.rotationPeriodHours).coerceAtLeast(1.5)
+                        body.copy(rotationPeriodHours = if (reverse) -period else period)
+                    } },
+                    modifier = Modifier.testTag("toggle_retrograde")
+                )
+            }
+            b.ringSystem?.let { ring ->
+                Text("Ring System", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                LabeledSlider("Ring opacity: ${(ring.opacity * 100).toInt()}%", ring.opacity) { opacity ->
+                    onEditBody { body -> body.copy(ringSystem = body.ringSystem?.copy(opacity = opacity)) }
+                }
+                val maxOuter = 4.5f
+                val outerFrac = ((ring.outerRadiusRatio - 1.2f) / (maxOuter - 1.2f)).coerceIn(0f, 1f)
+                LabeledSlider("Ring outer radius: ${String.format("%.2f×", ring.outerRadiusRatio)}", outerFrac) { fraction ->
+                    val outer = 1.2f + fraction * (maxOuter - 1.2f)
+                    onEditBody { body -> body.copy(ringSystem = body.ringSystem?.copy(
+                        outerRadiusRatio = outer.coerceAtLeast(ring.innerRadiusRatio + 0.1f)
+                    )) }
+                }
             }
 
             // Orbit Velocity Nudge
@@ -455,6 +539,25 @@ fun InspectorPanel(
             }
         }
     }
+}
+
+@Composable
+private fun StateCoordinateField(
+    value: String,
+    label: String,
+    tag: String,
+    modifier: Modifier = Modifier,
+    onValueChange: (String) -> Unit
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1) },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        textStyle = MaterialTheme.typography.labelSmall,
+        modifier = modifier.testTag(tag)
+    )
 }
 
 @Composable

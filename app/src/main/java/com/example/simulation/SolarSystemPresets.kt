@@ -145,7 +145,7 @@ object SolarSystemPresets {
         val planetIds = mutableMapOf<String, CelestialBody>()
         for (p in specs) {
             val massSolar = p.massEarth * AstroConstants.EARTH_MASS_SOLAR
-            val (pos, vel) = orbitalElementsToState(
+            var (pos, vel) = orbitalElementsToState(
                 centralMassSolar = sunMass,
                 bodyMassSolar = massSolar,
                 semiMajorAxisAu = p.a,
@@ -155,6 +155,15 @@ object SolarSystemPresets {
                 argPeriapsisDeg = p.omega,
                 meanAnomalyDeg = p.m0
             )
+            // Replace the analytic fallback with a real DE441/JPL Horizons J2000 state
+            // whenever a tracked Solar-System body has a published ephemeris vector.
+            JplHorizonsJ2000.state(p.name)?.let { state ->
+                val sunState = JplHorizonsJ2000.state("Sun")
+                if (sunState != null) {
+                    pos = state.position - sunState.position
+                    vel = state.velocityAuPerYear - sunState.velocityAuPerYear
+                }
+            }
             val body = CelestialBody(
                 id = allocateId(),
                 name = p.name,
@@ -179,14 +188,14 @@ object SolarSystemPresets {
             planetIds[p.name] = body
         }
 
-        // Major Moons (distances scaled gently above enhanced planet visual radius so moons never start inside enhanced spheres!)
+        // Major moons use their physical barycentric orbital distances; enhanced planet rendering
+        // never changes the simulated orbit.
         fun addMoon(
             parentName: String,
             name: String,
             massEarth: Double,
             radiusKm: Double,
             realSemiMajorKm: Double,
-            minSandboxOrbitAu: Double,
             ecc: Double,
             incDeg: Double,
             m0Deg: Double,
@@ -197,8 +206,8 @@ object SolarSystemPresets {
             val parent = planetIds[parentName] ?: return
             val massSolar = massEarth * AstroConstants.EARTH_MASS_SOLAR
             val realAu = realSemiMajorKm / AstroConstants.AU_KM
-            val orbitAu = max(realAu, minSandboxOrbitAu)
-            val (pos, vel) = orbitalElementsToState(
+            val orbitAu = realAu
+            var (pos, vel) = orbitalElementsToState(
                 centralMassSolar = parent.massSolar,
                 bodyMassSolar = massSolar,
                 semiMajorAxisAu = orbitAu,
@@ -210,6 +219,13 @@ object SolarSystemPresets {
                 parentPos = parent.pos,
                 parentVel = parent.vel
             )
+            JplHorizonsJ2000.state(name)?.let { state ->
+                val sunState = JplHorizonsJ2000.state("Sun")
+                if (sunState != null) {
+                    pos = state.position - sunState.position
+                    vel = state.velocityAuPerYear - sunState.velocityAuPerYear
+                }
+            }
             bodies.add(
                 CelestialBody(
                     id = allocateId(),
@@ -229,20 +245,20 @@ object SolarSystemPresets {
         }
 
         // Earth's Moon
-        addMoon("Earth", "Moon", 0.0123, 1737.4, 384_400.0, 0.036, 0.0549, 5.145, 45.0, 220.0, Triple(0.68f, 0.68f, 0.66f), 31.2f)
+        addMoon("Earth", "Moon", 0.0123, 1737.4, 384_400.0, 0.0549, 5.145, 45.0, 220.0, Triple(0.68f, 0.68f, 0.66f), 31.2f)
         // Mars Moons
-        addMoon("Mars", "Phobos", 1.78e-9, 11.27, 9376.0, 0.019, 0.0151, 1.09, 120.0, 233.0, Triple(0.45f, 0.40f, 0.36f), 33.4f)
-        addMoon("Mars", "Deimos", 2.47e-10, 6.2, 23463.0, 0.028, 0.0003, 1.79, 260.0, 233.0, Triple(0.48f, 0.44f, 0.39f), 34.8f)
+        addMoon("Mars", "Phobos", 1.78e-9, 11.27, 9376.0, 0.0151, 1.09, 120.0, 233.0, Triple(0.45f, 0.40f, 0.36f), 33.4f)
+        addMoon("Mars", "Deimos", 2.47e-10, 6.2, 23463.0, 0.0003, 1.79, 260.0, 233.0, Triple(0.48f, 0.44f, 0.39f), 34.8f)
         // Jupiter Galilean Moons
-        addMoon("Jupiter", "Io", 0.01496, 1821.6, 421_700.0, 0.115, 0.0041, 0.05, 10.0, 110.0, Triple(0.92f, 0.80f, 0.35f), 40.1f)
-        addMoon("Jupiter", "Europa", 0.00804, 1560.8, 671_034.0, 0.145, 0.009, 0.47, 100.0, 102.0, Triple(0.82f, 0.80f, 0.75f), 41.5f)
-        addMoon("Jupiter", "Ganymede", 0.0248, 2634.1, 1_070_412.0, 0.185, 0.0013, 0.20, 210.0, 110.0, Triple(0.62f, 0.58f, 0.52f), 42.9f)
-        addMoon("Jupiter", "Callisto", 0.0180, 2410.3, 1_882_709.0, 0.235, 0.0074, 0.19, 310.0, 134.0, Triple(0.46f, 0.44f, 0.41f), 44.3f)
+        addMoon("Jupiter", "Io", 0.01496, 1821.6, 421_700.0, 0.0041, 0.05, 10.0, 110.0, Triple(0.92f, 0.80f, 0.35f), 40.1f)
+        addMoon("Jupiter", "Europa", 0.00804, 1560.8, 671_034.0, 0.009, 0.47, 100.0, 102.0, Triple(0.82f, 0.80f, 0.75f), 41.5f)
+        addMoon("Jupiter", "Ganymede", 0.0248, 2634.1, 1_070_412.0, 0.0013, 0.20, 210.0, 110.0, Triple(0.62f, 0.58f, 0.52f), 42.9f)
+        addMoon("Jupiter", "Callisto", 0.0180, 2410.3, 1_882_709.0, 0.0074, 0.19, 310.0, 134.0, Triple(0.46f, 0.44f, 0.41f), 44.3f)
         // Saturn Moons (outside rings!)
-        addMoon("Saturn", "Enceladus", 1.8e-5, 252.1, 237_948.0, 0.195, 0.0047, 0.02, 70.0, 75.0, Triple(0.92f, 0.95f, 0.98f), 51.0f)
-        addMoon("Saturn", "Titan", 0.0225, 2574.7, 1_221_870.0, 0.255, 0.0288, 0.35, 195.0, 94.0, Triple(0.86f, 0.65f, 0.32f), 52.6f)
+        addMoon("Saturn", "Enceladus", 1.8e-5, 252.1, 237_948.0, 0.0047, 0.02, 70.0, 75.0, Triple(0.92f, 0.95f, 0.98f), 51.0f)
+        addMoon("Saturn", "Titan", 0.0225, 2574.7, 1_221_870.0, 0.0288, 0.35, 195.0, 94.0, Triple(0.86f, 0.65f, 0.32f), 52.6f)
         // Neptune Moon
-        addMoon("Neptune", "Triton", 0.00359, 1353.4, 354_759.0, 0.085, 0.000016, 156.8, 150.0, 38.0, Triple(0.75f, 0.72f, 0.70f), 61.2f)
+        addMoon("Neptune", "Triton", 0.00359, 1353.4, 354_759.0, 0.000016, 156.8, 150.0, 38.0, Triple(0.75f, 0.72f, 0.70f), 61.2f)
 
         // Main Asteroid Belt (180 asteroids between 2.15 and 3.25 AU, rendered via GPU instancing!)
         val rng = Random(2026)

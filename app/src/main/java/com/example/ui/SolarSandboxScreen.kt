@@ -9,6 +9,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -24,9 +25,11 @@ import com.example.viewmodel.SandboxViewModel
 @Composable
 fun SolarSandboxScreen(viewModel: SandboxViewModel) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current.applicationContext
 
-    val renderer = remember {
+    val renderer = remember(context) {
         SolarGLRenderer(
+            context = context,
             frameStateRef = viewModel.renderFrameRef,
             onLabelsUpdated = { labels -> viewModel.updateScreenLabels(labels) },
             onFpsUpdated = { fps -> viewModel.updateFps(fps) }
@@ -192,6 +195,7 @@ fun SolarSandboxScreen(viewModel: SandboxViewModel) {
                 onBloomChange = { viewModel.setBloomIntensity(it) },
                 onIntegratorChange = { viewModel.setIntegrator(it) },
                 onToggleTrueScale = { viewModel.toggleTrueScale() },
+                onToggleEventText = { viewModel.toggleEventText() },
                 onDismiss = { viewModel.setQualityDialogVisible(false) }
             )
         }

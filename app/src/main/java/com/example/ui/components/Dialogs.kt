@@ -110,6 +110,7 @@ fun QualitySettingsDialog(
     onBloomChange: (Float) -> Unit,
     onIntegratorChange: (IntegratorMode) -> Unit,
     onToggleTrueScale: () -> Unit,
+    onToggleEventText: () -> Unit,
     onDismiss: () -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
@@ -169,6 +170,14 @@ fun QualitySettingsDialog(
                         Text("Off = Sandbox Clear View • On = Exact 1:1 km/AU radii", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
                     }
                     Switch(checked = uiState.config.trueScaleMode, onCheckedChange = { onToggleTrueScale() })
+                }
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column {
+                        Text("Event Text", style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
+                        Text("Show or hide impact and evolution toasts", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                    }
+                    Switch(checked = uiState.config.showEventText, onCheckedChange = { onToggleEventText() }, modifier = Modifier.testTag("toggle_event_text"))
                 }
 
                 Text("N-Body Integrator", style = MaterialTheme.typography.labelMedium, color = TextSecondary)

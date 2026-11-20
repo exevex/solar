@@ -69,6 +69,40 @@ class SolarPhysicsTest {
     }
 
     @Test
+    fun `solar system preset uses JPL J2000 Earth and Moon states in real orbit`() {
+        val bodies = SolarSystemPresets.buildPreset(SystemPreset.SOLAR_SYSTEM).bodies
+        val sun = bodies.first { it.name == "Sun" }
+        val earth = bodies.first { it.name == "Earth" }
+        val moon = bodies.first { it.name == "Moon" }
+        val jplSun = JplHorizonsJ2000.state("Sun")!!
+        val jplEarth = JplHorizonsJ2000.state("Earth")!!
+        val expectedEarthPosition = jplEarth.position - jplSun.position
+        val expectedEarthVelocity = jplEarth.velocityAuPerYear - jplSun.velocityAuPerYear
+
+        assertEquals(expectedEarthPosition.x, earth.pos.x, 1e-12)
+        assertEquals(expectedEarthPosition.y, earth.pos.y, 1e-12)
+        assertEquals(expectedEarthPosition.z, earth.pos.z, 1e-12)
+        assertEquals(expectedEarthVelocity.length(), earth.vel.length(), 1e-10)
+        assertTrue("Earth should stay near its observed 1 AU orbit", (earth.pos - sun.pos).length() in 0.95..1.05)
+        assertTrue("Moon should remain at its observed geocentric distance", (moon.pos - earth.pos).length() in 0.0023..0.0029)
+    }
+
+    @Test
+    fun `event text toggle hides toasts but keeps event state and persists`() {
+        val engine = PhysicsEngine()
+        engine.loadSnapshot(SolarSystemPresets.buildPreset(SystemPreset.SOLAR_SYSTEM))
+        engine.updateConfig { it.copy(showEventText = false) }
+        assertNull(engine.buildRenderFrameState(60f).lastEventMessage)
+
+        engine.updateConfig { it.copy(showEventText = true) }
+        assertEquals("Loaded: Solar System", engine.buildRenderFrameState(60f).lastEventMessage)
+
+        val snapshot = engine.createSnapshot("event-toggle")
+        val restored = SnapshotSerializer.fromJsonString(SnapshotSerializer.toJsonString(snapshot))
+        assertTrue(restored.config.showEventText)
+    }
+
+    @Test
     fun `collision creates crater, crust heat, and merges mass`() {
         val engine = PhysicsEngine()
         val p1 = CelestialBody(

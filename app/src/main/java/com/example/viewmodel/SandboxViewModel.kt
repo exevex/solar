@@ -348,6 +348,11 @@ class SandboxViewModel(application: Application) : AndroidViewModel(application)
         syncConfigImmediate()
     }
 
+    fun toggleEventText() {
+        engine.updateConfig { it.copy(showEventText = !it.showEventText) }
+        syncConfigImmediate()
+    }
+
     fun toggleTrueScale() {
         engine.updateConfig { it.copy(trueScaleMode = !it.trueScaleMode) }
         syncConfigImmediate()

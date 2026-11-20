@@ -18,6 +18,12 @@
   - Momentum-conserving merging with volume growth, shockwaves, surface thermal heating (glowing lava crust melting with radiative cooling), and persistent **3D impact craters**.
   - Hypervelocity catastrophic fragmentation spawning glowing molten debris chunks and particle bursts.
 
+### Real observation assets & physics provenance
+- **Observation-based 3D bodies:** Named bodies use NASA/JPL equirectangular maps packed in `app/src/main/res/drawable-nodpi`, wrapped on UV spheres with real physical radii. The shader is procedural only for custom bodies without a measured map; provenance and SHA-256 checksums are in [REAL_DATA_SOURCES.md](REAL_DATA_SOURCES.md).
+- **JPL initial conditions:** The Solar System preset loads DE441/JPL Horizons J2000 state vectors for the Sun, planets and tracked moons, then evolves them with the selected N-body integrator.
+- **Physical collision model:** Gravity softening, contact radii, impact energy and Roche limits use physical radii rather than sandbox display radii. Swept contacts prevent fast objects tunneling through a body between simulation samples.
+- **Event text toggle:** Physics events continue to happen when the HUD event-text switch is off; only the explanatory toast is hidden.
+
 ### Visuals & OpenGL ES 3.0 Shaders
 - **Floating Origin + Logarithmic Depth:** World coordinates are subtracted in 64-bit `Double` precision relative to the camera focus target before uploading `Float` matrices, paired with logarithmic depth encoding to eliminate jitter and z-fighting from planetary surfaces out to 100+ AU.
 - **Procedural 3D Spherical PBR Planets:** Zero-seam 3D FBM terrain, normal relief perturbation, ocean specular glint, polar ice caps, Earth night-side city lights, animated swirling cloud layers, Jupiter/Saturn zonal jet bands & Great Red Spot, and Mars/Mercury craters.

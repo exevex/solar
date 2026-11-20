@@ -219,7 +219,9 @@ data class SimulationConfig(
     val stellarEvolutionRateGyrPerSec: Double = 0.0,
     val trueScaleMode: Boolean = false,
     val showOrbits: Boolean = true,
-    val showLabels: Boolean = true
+    val showLabels: Boolean = true,
+    /** Keep event simulation active while suppressing the HUD toast text. */
+    val showEventText: Boolean = true
 )
 
 data class SimulationSnapshot(

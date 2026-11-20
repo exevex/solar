@@ -210,9 +210,11 @@ object ShaderLibrary {
         out vec3 vLocalPos;
         out vec3 vWorldPos;
         out vec3 vWorldNormal;
+        out vec2 vUv;
 
         void main() {
             vLocalPos = aPos;
+            vUv = aUv;
             vec4 world = uModel * vec4(aPos, 1.0);
             vWorldPos = world.xyz;
             vWorldNormal = normalize(mat3(uModel) * aNormal);
@@ -225,10 +227,13 @@ object ShaderLibrary {
         in vec3 vLocalPos;
         in vec3 vWorldPos;
         in vec3 vWorldNormal;
+        in vec2 vUv;
 
         uniform vec3 uCamPos;
         uniform vec3 uBodyPos;
         uniform float uBodyRadius;
+        uniform sampler2D uSurfaceTex;
+        uniform int uUseSurfaceTex;
         uniform int uPlanetStyle; // 0=EarthLike, 1=Terrestrial/Mars/Moon, 2=GasGiant, 3=IceGiant, 4=Comet
         uniform float uSeed;
         uniform float uTime;
@@ -394,6 +399,14 @@ object ShaderLibrary {
                 height = crag;
             }
 
+            // Mission-derived map layers override invented procedural geology wherever an
+            // observed planetary map exists; procedural shading remains a no-map fallback.
+            if (uUseSurfaceTex == 1) {
+                baseColor = texture(uSurfaceTex, vec2(vUv.x, 1.0 - vUv.y)).rgb;
+                roughness = (uPlanetStyle == 0) ? 0.42 : 0.64;
+                specStrength = (uPlanetStyle == 0) ? 0.24 : 0.08;
+            }
+
             // Apply procedural surface craters + glowing impact craters
             float craterLava = 0.0;
             for (int c = 0; c < 8; c++) {
@@ -487,9 +500,11 @@ object ShaderLibrary {
         out vec3 vLocalPos;
         out vec3 vWorldPos;
         out vec3 vWorldNormal;
+        out vec2 vUv;
 
         void main() {
             vLocalPos = aPos;
+            vUv = aUv;
             vec4 w = uModel * vec4(aPos, 1.0);
             vWorldPos = w.xyz;
             vWorldNormal = normalize(mat3(uModel) * aNormal);
@@ -502,9 +517,12 @@ object ShaderLibrary {
         in vec3 vLocalPos;
         in vec3 vWorldPos;
         in vec3 vWorldNormal;
+        in vec2 vUv;
 
         uniform vec3 uCamPos;
         uniform vec3 uStarColor;
+        uniform sampler2D uSurfaceTex;
+        uniform int uUseSurfaceTex;
         uniform float uTime;
         uniform float uSeed;
         uniform float uIntensity;
@@ -522,6 +540,9 @@ object ShaderLibrary {
             float limb = pow(max(dot(N, V), 0.05), 0.42);
 
             vec3 hotCore = uStarColor * (1.25 + gran * 0.75) * uIntensity;
+            if (uUseSurfaceTex == 1) {
+                hotCore = texture(uSurfaceTex, vec2(vUv.x, 1.0 - vUv.y)).rgb * (1.4 + gran * 0.45) * uIntensity;
+            }
             vec3 coolSpot = uStarColor * 0.35;
             vec3 col = mix(hotCore, coolSpot, spots * 0.65);
             col *= (0.48 + 0.65 * limb);

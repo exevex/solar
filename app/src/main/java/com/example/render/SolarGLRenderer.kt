@@ -1,5 +1,6 @@
 package com.example.render
 
+import android.content.Context
 import android.opengl.GLES30
 import android.opengl.GLSurfaceView
 import android.opengl.Matrix
@@ -28,6 +29,7 @@ data class SlingshotPreview(
 )
 
 class SolarGLRenderer(
+    private val context: Context,
     private val frameStateRef: AtomicReference<RenderFrameState?>,
     private val onLabelsUpdated: (List<ScreenBodyLabel>) -> Unit,
     private val onFpsUpdated: (Float) -> Unit
@@ -118,12 +120,14 @@ class SolarGLRenderer(
     private val lineBuf: FloatBuffer = ByteBuffer.allocateDirect(maxLineVerts * 7 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
     private val maxParticles = 1024
     private val particleBuf: FloatBuffer = ByteBuffer.allocateDirect(maxParticles * 7 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+    private var surfaceTextures: Map<String, Int> = emptyMap()
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         GLES30.glClearColor(0.01f, 0.015f, 0.03f, 1f)
         GLES30.glEnable(GLES30.GL_DEPTH_TEST)
         GLES30.glEnable(GLES30.GL_CULL_FACE)
         GLES30.glCullFace(GLES30.GL_BACK)
+        surfaceTextures = SurfaceTextureLibrary.load(context.applicationContext)
 
         skyboxProg = GlShaderProgram.compile(ShaderLibrary.SKYBOX_VS, ShaderLibrary.SKYBOX_FS, "Skybox")
         planetProg = GlShaderProgram.compile(ShaderLibrary.PLANET_VS, ShaderLibrary.PLANET_FS, "Planet")
@@ -390,6 +394,13 @@ class SolarGLRenderer(
                     starProg.setVec3("uStarColor", b.albedoColor.first, b.albedoColor.second, b.albedoColor.third)
                     starProg.setFloat("uTime", animTimeSec)
                     starProg.setFloat("uSeed", b.seed)
+                    val starTexture = SurfaceTextureLibrary.keyForBody(b)?.let { surfaceTextures[it] }
+                    starProg.setInt("uUseSurfaceTex", if (starTexture != null) 1 else 0)
+                    if (starTexture != null) {
+                        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+                        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, starTexture)
+                        starProg.setInt("uSurfaceTex", 0)
+                    }
                     val hdrBoost = when (b.type) {
                         BodyType.NEUTRON_STAR -> 2.8f
                         BodyType.WHITE_DWARF -> 2.2f
@@ -410,6 +421,11 @@ class SolarGLRenderer(
                     planetProg.setVec3("uCamPos", eyeX, eyeY, eyeZ)
                     planetProg.setVec3("uBodyPos", rx, ry, rz)
                     planetProg.setFloat("uBodyRadius", rad)
+                    val surfaceTexture = SurfaceTextureLibrary.keyForBody(b)?.let { surfaceTextures[it] }
+                    planetProg.setInt("uUseSurfaceTex", if (surfaceTexture != null) 1 else 0)
+                    planetProg.setInt("uSurfaceTex", 0)
+                    GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+                    GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, surfaceTexture ?: 0)
 
                     val style = when (b.type) {
                         BodyType.EARTH_LIKE -> 0

@@ -125,7 +125,7 @@ class PhysicsEngine {
             elapsedYears = elapsedYears,
             config = config,
             simTps = tps,
-            lastEventMessage = if (eventMessageTimerSec > 0f) lastEventMessage else null
+            lastEventMessage = if (config.showEventText && eventMessageTimerSec > 0f) lastEventMessage else null
         )
     }
 
@@ -206,12 +206,15 @@ class PhysicsEngine {
         val subDt = totalSimDt / substeps
 
         for (stepIdx in 0 until substeps) {
+            // Keep the previous state so fast physical bodies cannot tunnel through one another
+            // between discrete integration samples.
+            val previousPositions = bodies.associate { it.id to it.pos }
             when (config.integrator) {
                 IntegratorMode.VELOCITY_VERLET -> integrateVelocityVerlet(subDt)
                 IntegratorMode.RK4 -> integrateRK4(subDt)
             }
             processBlackHolePhysicsAndTidalDisruption(subDt)
-            processCollisions()
+            processCollisions(previousPositions)
         }
 
         // Spin rotation, cooling, radiative equilibrium temperature, stellar evolution & orbit trails once per tick
@@ -267,7 +270,7 @@ class PhysicsEngine {
             val bi = bodies[i]
             val mi = bi.massSolar
             val pix = posX[i]; val piy = posY[i]; val piz = posZ[i]
-            val radI = bi.getVisualRadiusAu(config.trueScaleMode) * 0.35
+            val radI = bi.physicsRadiusAu
 
             for (j in i + 1 until n) {
                 val bj = bodies[j]
@@ -277,8 +280,8 @@ class PhysicsEngine {
                 val dx = posX[j] - pix
                 val dy = posY[j] - piy
                 val dz = posZ[j] - piz
-                val radJ = bj.getVisualRadiusAu(config.trueScaleMode) * 0.35
-                val soft = max(radI + radJ, 1e-5)
+                val radJ = bj.physicsRadiusAu
+                val soft = max(radI + radJ, 1e-12)
                 val r2 = dx * dx + dy * dy + dz * dz + soft * soft
                 val invR = 1.0 / sqrt(r2)
                 val invR3 = invR * invR * invR
@@ -412,8 +415,7 @@ class PhysicsEngine {
 
         for (bhIdx in bhIndices) {
             var bh = bodies[bhIdx]
-            val bhRad = bh.getVisualRadiusAu(config.trueScaleMode)
-            val tidalLimit = bhRad * 3.8
+            val bhRad = bh.physicsRadiusAu
             var accretionGain = 0f
 
             for (j in bodies.indices) {
@@ -421,10 +423,15 @@ class PhysicsEngine {
                 val victim = bodies[j]
                 if (victim.type == BodyType.BLACK_HOLE) continue
 
+                // Fluid Roche limit: 2.44 R_body (M_BH / m_body)^(1/3).
+                // The event horizon remains the hard capture boundary.
+                val tidalLimit = 2.44 * victim.physicsRadiusAu *
+                    cbrt(bh.massSolar / victim.massSolar.coerceAtLeast(1e-18))
+                val interactionLimit = max(tidalLimit, bhRad * 1.5)
                 val diff = victim.pos - bh.pos
                 val dist = diff.length()
-                if (dist < tidalLimit) {
-                    val stress = ((tidalLimit - dist) / tidalLimit).toFloat().coerceIn(0f, 1f)
+                if (dist < interactionLimit) {
+                    val stress = ((interactionLimit - dist) / interactionLimit).toFloat().coerceIn(0f, 1f)
                     val shredFraction = (1.8 * stress * subDt).coerceAtMost(0.45)
                     val absorbedMass = victim.massSolar * shredFraction
                     val remainingMass = victim.massSolar - absorbedMass
@@ -517,7 +524,22 @@ class PhysicsEngine {
         }
     }
 
-    private fun processCollisions() {
+    private fun sweptDistanceSq(
+        previousA: Vec3d,
+        currentA: Vec3d,
+        previousB: Vec3d,
+        currentB: Vec3d
+    ): Double {
+        val relativeStart = previousB - previousA
+        val relativeDelta = (currentB - previousB) - (currentA - previousA)
+        val deltaSq = relativeDelta.lengthSq()
+        val u = if (deltaSq > 1e-24) {
+            (-relativeStart.dot(relativeDelta) / deltaSq).coerceIn(0.0, 1.0)
+        } else 0.0
+        return (relativeStart + relativeDelta * u).lengthSq()
+    }
+
+    private fun processCollisions(previousPositions: Map<Long, Vec3d> = emptyMap()) {
         val n = bodies.size
         if (n < 2) return
         val removed = BooleanArray(n)
@@ -526,18 +548,23 @@ class PhysicsEngine {
         for (i in 0 until n) {
             if (removed[i]) continue
             var bi = bodies[i]
-            val ri = bi.getVisualRadiusAu(config.trueScaleMode)
+            val ri = bi.physicsRadiusAu
 
             for (j in i + 1 until n) {
                 if (removed[j]) continue
                 val bj = bodies[j]
                 if (bi.isBackgroundCluster && bj.isBackgroundCluster) continue
-                val rj = bj.getVisualRadiusAu(config.trueScaleMode)
+                val rj = bj.physicsRadiusAu
 
                 val diff = bj.pos - bi.pos
                 val distSq = diff.lengthSq()
-                val minDist = (ri + rj) * 0.88
-                if (distSq < minDist * minDist) {
+                val minDist = (ri + rj) * 0.995
+                val currentContact = distSq <= minDist * minDist
+                val previousA = previousPositions[bi.id]
+                val previousB = previousPositions[bj.id]
+                val sweptContact = !currentContact && previousA != null && previousB != null &&
+                    sweptDistanceSq(previousA, bi.pos, previousB, bj.pos) <= minDist * minDist
+                if (currentContact || sweptContact) {
                     val primaryIsI = bi.massSolar >= bj.massSolar
                     val primary = if (primaryIsI) bi else bj
                     val secondary = if (primaryIsI) bj else bi
@@ -580,11 +607,17 @@ class PhysicsEngine {
                     // Normal collision: check kinetic vs binding energy for fragmentation vs merge
                     val reducedMass = (primary.massSolar * secondary.massSolar) / totalMass
                     val kineticEnergy = 0.5 * reducedMass * relSpeed * relSpeed
-                    val bindingEnergy = AstroConstants.G_AU * primary.massSolar * secondary.massSolar / max(ri + rj, 1e-6)
+                    val bindingEnergy = AstroConstants.G_AU * primary.massSolar * secondary.massSolar / max(ri + rj, 1e-12)
                     val isCatastrophic = kineticEnergy > bindingEnergy * 2.2 && secondary.massSolar > primary.massSolar * 0.08 && !primary.type.isLuminous
 
                     // Impact normal in local planet space for crater placement
-                    val impactDir = (secondary.pos - primary.pos).normalized()
+                    val impactDir = if (sweptContact) {
+                        val oldPrimary = previousPositions[primary.id] ?: primary.pos
+                        val oldSecondary = previousPositions[secondary.id] ?: secondary.pos
+                        (oldSecondary - oldPrimary).normalized()
+                    } else {
+                        (secondary.pos - primary.pos).normalized()
+                    }
                     val craterRadius = (0.18f + (secondary.radiusKm / primary.radiusKm).toFloat() * 0.45f).coerceIn(0.10f, 0.55f)
                     val newCrater = CraterMark(
                         nx = impactDir.x.toFloat(),
